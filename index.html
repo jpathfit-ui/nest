@@ -321,6 +321,7 @@ function catTotals(rs) {
   return Object.entries(m).sort((a, b) => b[1] - a[1]);
 }
 function statusInfo() {
+  if (!S.cfg.url) return ['warn', 'Not connected'];
   if (S.syncing) return ['busy', 'Syncing'];
   if (S.authErr) return ['bad', 'Needs PIN'];
   if (S.queue.length) return ['warn', (navigator.onLine ? 'Waiting to sync' : 'Offline') + ' (' + S.queue.length + ')'];
@@ -372,7 +373,7 @@ function back() { if (S.stack.length > 1) history.back(); else go(curRoute().par
 /* ================= Chrome: bar, tabs, drawer ================= */
 function paintBar() {
   const bar = $('#bar');
-  if (!S.cfg.url || S.connectStep === 'who') { bar.innerHTML = '<div class="ttl" style="padding-left:6px"><h1>' + MARK(30) + 'NestLog</h1></div>'; return; }
+  if (S.connectStep === 'who') { bar.innerHTML = '<div class="ttl" style="padding-left:6px"><h1>' + MARK(30) + 'NestLog</h1></div>'; return; }
   const R = curRoute();
   const [cls, label] = statusInfo();
   const left = R.top ? `<button class="ib" data-act="menu" aria-label="Open menu">${IC.menu}</button>` : `<button class="ib" data-act="back" aria-label="Back">${IC.back}</button>`;
@@ -385,7 +386,7 @@ function paintBar() {
 function paintTabs() {
   const R = curRoute(), t = $('#tabs');
   const set = R.group && TABS[R.group];
-  if (!S.cfg.url || !set) { t.innerHTML = ''; return; }
+  if (!set) { t.innerHTML = ''; return; }
   t.innerHTML = set.map(([n, p]) => `<button class="tab ${p === curPath() ? 'on' : ''}" data-go="${p}">${esc(n)}</button>`).join('');
 }
 function paintDrawer() {
@@ -420,14 +421,14 @@ function confirmDialog(title, msg, okLabel) {
 function render() {
   paintBar(); paintTabs();
   const view = $('#view');
-  if (!S.cfg.url || S.connectStep === 'who') { viewConnect(view); return; }
+  if (S.connectStep === 'who') { viewConnect(view); return; }
   const R = curRoute();
   if (S.lastRoute !== curPath()) { view.scrollTop = 0; S.lastRoute = curPath(); }
   view.innerHTML = R.render();
   if (R.after) R.after();
 }
 function renderKeep() {
-  if (!S.cfg.url || S.connectStep === 'who') return;
+  if (S.connectStep === 'who') return;
   const a = document.activeElement;
   if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) { paintBar(); return; } // never rebuild a screen while someone is typing
   const view = $('#view'), top = view.scrollTop;
@@ -435,14 +436,7 @@ function renderKeep() {
 }
 
 /* ================= Views ================= */
-function viewConnect(view) {
-  if (S.connectStep === 'who') {
-    view.innerHTML = `<div class="hero"><div class="big" style="font-size:28px">Who is using this phone?</div><p class="mute">New entries will default to this person as Paid by.</p></div>
-      <div class="stack">${S.meta.people.map(p => `<button class="btn block" data-act="who" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>`;
-    return;
-  }
-  view.innerHTML = `<div class="hero"><div class="big" style="font-size:30px">Connect this phone</div><p class="mute">Paste the link and PIN from your Sheet setup. They stay on this phone only.</p></div>
-    <form data-form="connect">
+const connectForm = () => `<form data-form="connect">
       <label for="c-url">Script link</label>
       <input id="c-url" name="url" type="url" inputmode="url" autocapitalize="off" autocorrect="off" placeholder="Link ending in /exec" required>
       <label for="c-pin">PIN</label>
@@ -451,6 +445,14 @@ function viewConnect(view) {
       <div class="gap"></div>
       <button class="btn pri block">Connect</button>
     </form>`;
+function viewConnect(view) {
+  if (S.connectStep === 'who') {
+    view.innerHTML = `<div class="hero"><div class="big" style="font-size:28px">Who is using this phone?</div><p class="mute">New entries will default to this person as Paid by.</p></div>
+      <div class="stack">${S.meta.people.map(p => `<button class="btn block" data-act="who" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>`;
+    return;
+  }
+  view.innerHTML = '';
+
 }
 
 function rcHTML(r, expandable) {
@@ -473,6 +475,7 @@ function rcHTML(r, expandable) {
 
 function viewHome() {
   if (S.syncing && !S.lastSync && !S.rows.length && !S.queue.length) return `<div class="card soon">${LOADER(84)}<h3>Getting your numbers</h3><p class="mute">Opening your Sheet.</p></div>`;
+  const banner = S.cfg.url ? '' : `<div class="card soon"><h3>Not connected to a Sheet</h3><p class="mute">Everything you add is kept on this phone. Connect when you are ready and it all syncs.</p><button class="btn block" data-go="/settings">Connect your Sheet</button></div>`;
   const rs = allReceipts(), cm = monthKey(new Date()), pm = shiftMonth(cm, -1);
   const cur = inMonth(rs, cm), prev = inMonth(rs, pm);
   const spent = sum(cur), pspent = sum(prev);
@@ -483,7 +486,7 @@ function viewHome() {
   const hero = incM > 0
     ? `<div class="hero"><div class="lbl">Left over in ${monthLabel(cm)}</div><div class="big" style="color:${left < 0 ? 'var(--bad)' : 'var(--ink)'}">${fmt(left)}</div><div class="sm mute">Income ${fmt(incM)} \u00b7 Spent ${fmt(spent)}</div>${prev.length ? `<div class="sm mute">${monthLabel(pm)}: spent ${fmt(pspent)}</div>` : ''}</div>`
     : `<div class="hero"><div class="lbl">Spent in ${monthLabel(cm)}</div><div class="big">${fmt(spent)}</div><div class="sm mute">${prev.length ? monthLabel(pm) + ': ' + fmt(pspent) + ' \u00b7 ' : ''}<button class="link" data-go="/income/pay" style="padding:0;font-size:13px">Log a paycheque</button> to see what is left</div></div>`;
-  return `${failed}${dueHTML()}${hero}
+  return `${banner}${failed}${dueHTML()}${hero}
   <div class="row"><button class="btn pri grow" data-go="/expenses/add">${IC.plus} Add expense</button><button class="btn" data-act="scan" aria-label="Scan a receipt">${IC.camera}</button></div>
   ${cats.length ? `<h2>By category</h2><div class="card">${shown.map(([c, v]) => `<div class="cat"><div class="row"><span>${esc(c)}</span><b>${fmt(v)}</b></div><div class="bar"><b style="width:${Math.max(3, Math.round(v / cats[0][1] * 100))}%"></b></div></div>`).join('')}
       ${cats.length > 5 ? `<button class="link" data-act="catsToggle">${S.ui.catsOpen ? 'Show fewer' : 'Show all ' + cats.length}</button>` : ''}</div>` : ''}
@@ -605,7 +608,8 @@ function buildReceipt() {
 /* ---- Settings ---- */
 function viewSettings() {
   const last = S.lastSync ? new Date(S.lastSync).toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit' }) : 'Not yet';
-  return `<h2>This phone</h2><div class="card">
+  const conn = S.cfg.url ? '' : `<h2>Connect your Sheet</h2><div class="card"><p class="sm mute" style="margin-top:0">Optional. NestLog works on this phone without it. Paste the link and PIN from your Sheet setup and everything saved so far will sync. They stay on this phone only.</p>${connectForm()}</div>`;
+  return conn + `<h2>This phone</h2><div class="card">
       <div class="lbl">Using NestLog as</div>
       <div class="seg" style="margin-top:8px">${S.meta.people.map(p => `<button class="${S.prefs.paidBy === p ? 'on' : ''}" data-act="who2" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>
       <label for="s-lock">Lock after</label>
@@ -1070,13 +1074,15 @@ async function connect(url, pin, errBox) {
   try { await refresh(); }
   catch (e) { S.cfg = { url: '', pin: '' }; errBox(e.server ? e.message : (e.message || 'Could not reach the script. Check the link and your connection.')); return; }
   store.set('cfg', S.cfg);
-  S.connectStep = 'who'; render();
+  S.lastRoute = '';
+  if (S.prefs.paidBy) { S.connectStep = 'creds'; go('/home'); render(); flush(); toast('Connected. Syncing your entries.'); }
+  else { S.connectStep = 'who'; render(); }
 }
 const ACTS = {
   menu: openDrawer, closeDrawer, back,
-  sync: () => flush(),
-  scan: () => { if (!navigator.onLine) { toast('Scanning needs a connection. Add it by hand for now.'); return; } $('#cam').click(); },
-  pick: () => { if (!navigator.onLine) { toast('Scanning needs a connection. Add it by hand for now.'); return; } $('#pick').click(); },
+  sync: () => { if (!S.cfg.url) { go('/settings'); toast('Connect your Sheet below.'); return; } flush(); },
+  scan: () => { if (!S.cfg.url) { toast('Connect your Sheet in Settings to scan photos. Paste text works without it.'); return; } if (!navigator.onLine) { toast('Scanning needs a connection. Add it by hand for now.'); return; } $('#cam').click(); },
+  pick: () => { if (!S.cfg.url) { toast('Connect your Sheet in Settings to scan photos. Paste text works without it.'); return; } if (!navigator.onLine) { toast('Scanning needs a connection. Add it by hand for now.'); return; } $('#pick').click(); },
   readText: () => {
     const txt = ((S.paste && S.paste.text) || '').trim();
     if (txt.length < 8) { toast('Scan or paste the receipt text first.'); return; }
@@ -1091,6 +1097,7 @@ const ACTS = {
   readTextAI: () => {
     const txt = ((S.paste && S.paste.text) || '').trim();
     if (txt.length < 8) { toast('Scan or paste the receipt text first.'); return; }
+    if (!S.cfg.url) { toast('Connect your Sheet in Settings to use Gemini. Read this text works without it.'); return; }
     if (!navigator.onLine) { toast('Gemini needs a connection. Use Read this text instead.'); return; }
     runScan({ text: txt.slice(0, 6000) }, '', 'text-ai');
   },
