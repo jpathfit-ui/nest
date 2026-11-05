@@ -116,6 +116,9 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--acc);outline-off
 .thumb{max-width:150px;max-height:190px;border-radius:12px;border:1px solid var(--line);display:block;margin:0 auto 14px;object-fit:cover}
 .ld{display:block;margin:0 auto 14px}
 .lw{transform-box:fill-box;transform-origin:50% 100%;animation:lwig .6s ease-in-out infinite}
+#splash{pointer-events:none;position:fixed;inset:0;background:var(--bg);z-index:60;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .35s}
+#splash.out{opacity:0;pointer-events:none}
+#splash .ld{margin:0}
 .lw2{animation-delay:.08s}.lw3{animation-delay:.16s}
 @keyframes lwig{0%,60%,100%{transform:rotate(0)}15%{transform:rotate(-10deg)}30%{transform:rotate(9deg)}45%{transform:rotate(-4deg)}}
 @media (prefers-reduced-motion:reduce){.lw{animation:none}}
@@ -138,6 +141,7 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--acc);outline-off
 </style>
 </head>
 <body>
+<div id="splash" aria-hidden="true"></div>
 <div id="app">
   <header id="bar"></header>
   <nav id="tabs"></nav>
@@ -1364,6 +1368,11 @@ window.addEventListener('hashchange', () => {
 document.querySelector('#lock h1').insertAdjacentHTML('afterbegin', MARK(34));
 window.__ledger = { parseReceiptText, spreadTax, advanceOnce, nextPayFor }; // test hook for the tax maths
 
+{ // Opening splash: the wiggling eggs for about a second, then fade out.
+  const sp = $('#splash'); sp.innerHTML = LOADER(110);
+  const t0 = Date.now(), hide = () => { sp.classList.add('out'); setTimeout(() => sp.remove(), 450); };
+  setTimeout(hide, 1100); sp.addEventListener('click', hide);
+}
 S.stack.push(curPath());
 if (S.cfg.pin && Date.now() - lastActive > S.prefs.lockMin * 60000) { S.locked = true; $('#lock').hidden = false; }
 render();
