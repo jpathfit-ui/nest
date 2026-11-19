@@ -139,6 +139,21 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--acc);outline-off
 .tot-r{display:flex;justify-content:space-between;align-items:center;padding:6px 0}
 .tot-r input{width:112px;height:42px;text-align:right}
 .match{font-size:14px;font-weight:600;margin-top:6px}
+.bar.warn{background:var(--warn-soft)}.bar.warn>b{background:var(--warn)}
+.bar.bad{background:var(--bad-soft)}.bar.bad>b{background:var(--bad)}
+.bud{display:block;width:100%;text-align:left;cursor:pointer}
+.bud .bar>b{animation:fill .55s ease-out}
+@keyframes fill{from{width:0}}
+@media (prefers-reduced-motion:reduce){.bud .bar>b{animation:none}}
+.nt{padding:6px 0;border-bottom:1px solid var(--line)}
+.nt:last-of-type{border-bottom:0}
+.act{display:flex;align-items:center;gap:12px;width:100%;text-align:left;cursor:pointer;padding:12px 14px;margin-bottom:8px}
+.av{width:36px;height:36px;border-radius:50%;background:var(--acc-soft);color:var(--acc);display:grid;place-items:center;font-weight:700;flex:none}
+.act-t{flex:1;min-width:0;display:flex;flex-direction:column}
+.act-t b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+.act-a{font-weight:700;font-variant-numeric:tabular-nums;flex:none}
+.pth{width:44px;height:56px;object-fit:cover;border-radius:8px;background:var(--line);flex:none}
+#modal .sheet{max-height:92vh;overflow:auto}
 </style>
 </head>
 <body>
@@ -222,6 +237,8 @@ const S = {
   queue: store.get('queue', []).map(q => ({ ...q, sending: false })),
   failed: store.get('failed', []).map(f => f.op ? f : { op: { type: 'add', receipt: f.receipt }, label: f.receipt.merchant, reason: f.reason }),
   income: store.get('income', []), jobs: store.get('jobs', []),
+  budgets: store.get('budgets', []), bills: store.get('bills', []), notes: store.get('notes', []), photos: store.get('photos', []), pics: store.get('pics', []),
+  budDraft: null, billDraft: null, pastePhoto: null,
   ui: { month: monthKey(new Date()), f: { person: 'All', cat: '', q: '' }, open: {}, catsOpen: false, flagsOpen: false, imonth: monthKey(new Date()), ip: 'All', iopen: {} },
   draft: null, payDraft: null, jobDraft: null, syncing: false, authErr: false, netErr: false, locked: false,
   stack: [], lastSync: 0, lastRoute: '', connectStep: 'creds', scan: null, scanToken: 0, paste: null
@@ -249,6 +266,9 @@ async function refresh() {
   S.meta = { ...S.meta, ...j.meta };
   S.income = (j.income || []).map(r => ({ id: r.id, date: r.date, person: r.person, job: r.job, gross: r.gross === null ? null : Math.round(r.gross * 100), net: Math.round(r.net * 100), account: r.account, note: r.note }));
   S.jobs = (j.jobs || []).map(r => ({ id: r.id, person: r.person, name: r.name, freq: r.freq, net: Math.round(r.typicalNet * 100), nextPay: r.nextPay || '', active: r.active !== false }));
+  if (Array.isArray(j.budgets)) { S.budgets = j.budgets.map(b => ({ category: b.category, cents: Math.round(b.limit * 100) })); store.set('budgets', S.budgets); }
+  if (Array.isArray(j.bills)) { S.bills = j.bills.map(b => ({ id: b.id, name: b.name, cents: Math.round(b.amount * 100), category: b.category, freq: b.freq, nextDue: b.nextDue, day: b.day || 0, active: b.active !== false })); store.set('bills', S.bills); }
+  if (Array.isArray(j.notes)) { S.notes = j.notes.map(n => ({ id: n.id, entryId: n.entryId, author: n.author, text: n.text, ts: n.ts })); store.set('notes', S.notes); }
   S.lastSync = Date.now();
   store.set('rows', S.rows); store.set('meta', S.meta); store.set('income', S.income); store.set('jobs', S.jobs);
 }
@@ -257,7 +277,7 @@ function applyAdded(rc) {
   rc.lines.forEach(l => S.rows.push({ id: rc.id, date: rc.date, merchant: rc.merchant, category: l.category, note: rc.note, cents: l.cents, paidBy: rc.paidBy, account: rc.account, ratio: null }));
 }
 function opLabel(q) {
-  return q.type === 'add' ? q.receipt.merchant : q.type === 'addIncome' ? q.entry.job : q.type === 'saveJob' ? q.job.name : q.type === 'remove' ? 'a deleted expense' : q.type === 'removeIncome' ? 'a deleted paycheque' : 'a deleted job';
+  return q.type === 'add' ? q.receipt.merchant : q.type === 'addIncome' ? q.entry.job : q.type === 'saveJob' ? q.job.name : q.type === 'remove' ? 'a deleted expense' : q.type === 'removeIncome' ? 'a deleted paycheque' : q.type === 'saveBudget' || q.type === 'removeBudget' ? 'the ' + q.category + ' budget' : q.type === 'saveBill' ? q.bill.name : q.type === 'removeBill' ? 'a deleted bill' : q.type === 'addNote' ? 'a note' : q.type === 'removeNote' ? 'a deleted note' : 'a deleted job';
 }
 async function runOp(q) {
   if (q.type === 'add') { await api('add', { receipt: q.receipt }); applyAdded(q.receipt); }
@@ -266,6 +286,12 @@ async function runOp(q) {
   else if (q.type === 'removeIncome') { await api('removeIncome', { id: q.id }); S.income = S.income.filter(r => r.id !== q.id); }
   else if (q.type === 'saveJob') { await api('saveJob', { job: q.job }); const i = S.jobs.findIndex(j => j.id === q.job.id); if (i >= 0) S.jobs[i] = { ...q.job }; else S.jobs.push({ ...q.job }); }
   else if (q.type === 'removeJob') { await api('removeJob', { id: q.id }); S.jobs = S.jobs.filter(j => j.id !== q.id); }
+  else if (q.type === 'saveBudget') { await api('saveBudget', { category: q.category, cents: q.cents }); const i = S.budgets.findIndex(b => b.category === q.category); if (i >= 0) S.budgets[i].cents = q.cents; else S.budgets.push({ category: q.category, cents: q.cents }); store.set('budgets', S.budgets); }
+  else if (q.type === 'removeBudget') { await api('removeBudget', { category: q.category }); S.budgets = S.budgets.filter(b => b.category !== q.category); store.set('budgets', S.budgets); }
+  else if (q.type === 'saveBill') { await api('saveBill', { bill: q.bill }); const i = S.bills.findIndex(b => b.id === q.bill.id); if (i >= 0) S.bills[i] = { ...q.bill }; else S.bills.push({ ...q.bill }); store.set('bills', S.bills); }
+  else if (q.type === 'removeBill') { await api('removeBill', { id: q.id }); S.bills = S.bills.filter(b => b.id !== q.id); store.set('bills', S.bills); }
+  else if (q.type === 'addNote') { await api('addNote', { note: q.note }); if (!S.notes.some(n => n.id === q.note.id)) S.notes.push({ ...q.note }); store.set('notes', S.notes); }
+  else if (q.type === 'removeNote') { await api('removeNote', { id: q.id }); S.notes = S.notes.filter(n => n.id !== q.id); store.set('notes', S.notes); }
 }
 function applyIncome(e) {
   if (!S.income.some(r => r.id === e.id)) S.income.push({ id: e.id, date: e.date, person: e.person, job: e.job, gross: e.gross, net: e.net, account: e.account, note: e.note });
@@ -286,7 +312,7 @@ async function flush() {
         if (e.server && !/pin|tries/i.test(e.message)) {
           // The script refused this one entry. Park it so it never blocks the rest, and tell the user.
           S.queue.shift(); saveQ();
-          S.failed.push({ op: { ...q, sending: undefined }, label: opLabel(q), reason: e.message }); store.set('failed', S.failed);
+          S.failed.push({ op: { ...q, sending: undefined }, label: opLabel(q), reason: /unknown action/i.test(e.message) ? 'Your Sheet script needs the newest version. Redeploy it as a new version, then try again.' : e.message }); store.set('failed', S.failed);
           continue;
         }
         throw e;
@@ -334,6 +360,213 @@ function statusInfo() {
   return ['', 'Synced'];
 }
 
+/* ================= Photos, budgets, bills, notes, activity ================= */
+// Receipt photos live in IndexedDB on this phone, so the camera works with no Sheet connected.
+const PH = {
+  mem: {}, db: null,
+  open() {
+    if (!this.db) this.db = new Promise((res, rej) => { try { const r = indexedDB.open('nestlog', 1); r.onupgradeneeded = () => r.result.createObjectStore('photos'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); } catch (e) { rej(e); } });
+    return this.db;
+  },
+  async put(id, data) {
+    this.mem[id] = data;
+    try { const db = await this.open(); await new Promise((res, rej) => { const t = db.transaction('photos', 'readwrite'); t.objectStore('photos').put(data, id); t.oncomplete = res; t.onerror = () => rej(t.error); }); } catch (e) { /* kept in memory only */ }
+  },
+  async get(id) {
+    try { const db = await this.open(); const v = await new Promise((res, rej) => { const q = db.transaction('photos').objectStore('photos').get(id); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); return v || this.mem[id] || null; }
+    catch (e) { return this.mem[id] || null; }
+  },
+  async del(id) {
+    delete this.mem[id];
+    try { const db = await this.open(); await new Promise(res => { const t = db.transaction('photos', 'readwrite'); t.objectStore('photos').delete(id); t.oncomplete = res; t.onerror = res; }); } catch (e) { /* nothing to remove */ }
+  }
+};
+const hasPic = id => S.pics.includes(id);
+function keepPhotoId(id) { if (id && !S.photos.some(p => p.id === id)) { S.photos.push({ id, ts: Date.now() }); store.set('photos', S.photos); } }
+function attachPhoto(from, to) {
+  S.photos = S.photos.filter(p => p.id !== from); store.set('photos', S.photos);
+  if (!S.pics.includes(to)) { S.pics.push(to); store.set('pics', S.pics); }
+  return PH.get(from).then(d => d ? PH.put('r_' + to, d) : null).then(() => PH.del(from));
+}
+function openPhoto(id, url) {
+  if (!S.draft) S.draft = newDraft();
+  S.draft.photoId = id; S.draft.photo = url;
+  go('/expenses/add');
+}
+async function capture(file) {
+  let url;
+  try { url = await shrinkURL(file, 1600, 0.72); } catch (e) { toast(e.message || 'Could not open that photo.'); return; }
+  const id = uid('p');
+  await PH.put(id, url);
+  if (S.cfg.url && navigator.onLine) { runScan(async () => ({ image: await shrink(file) }), url, 'photo', id); return; }
+  keepPhotoId(id);
+  openPhoto(id, url);
+  toast(S.cfg.url ? 'No connection, so the photo is kept on this phone.' : 'Photo kept on this phone. Fill in the details from it.');
+}
+function showPic(url) {
+  const m = $('#modal');
+  $('.sheet', m).innerHTML = `<img src="${url}" alt="Receipt photo" style="width:100%;border-radius:12px;display:block"><div class="gap"></div><button class="btn block" data-m="0">Close</button>`;
+  m.hidden = false;
+  m.onclick = e => { if (e.target.closest('[data-m]') || e.target === m) m.hidden = true; };
+}
+function photosHTML() {
+  if (!S.photos.length) return '';
+  return `<div class="card"><b>${S.photos.length === 1 ? 'A receipt photo is' : S.photos.length + ' receipt photos are'} kept on this phone</b>
+    <div class="sm mute">They are waiting for you to fill in the details.</div>
+    ${S.photos.map(p => `<div class="row" style="margin-top:10px"><img class="pth" data-ph="${esc(p.id)}" alt=""><div class="grow sm mute">${esc(whenLabel(p.ts))}</div><button class="btn pri" style="height:44px" data-act="phOpen" data-id="${esc(p.id)}">Add expense</button><button class="ib" data-act="phDel" data-id="${esc(p.id)}" aria-label="Discard photo">${IC.x}</button></div>`).join('')}</div>`;
+}
+function afterHome() { document.querySelectorAll('img[data-ph]').forEach(async im => { const d = await PH.get(im.dataset.ph); if (d) im.src = d; }); }
+
+/* ---- Budgets ---- */
+function effBudgets() {
+  let b = S.budgets.map(x => ({ ...x }));
+  S.queue.forEach(q => {
+    if (q.type === 'saveBudget') { const i = b.findIndex(x => x.category === q.category); if (i >= 0) b[i].cents = q.cents; else b.push({ category: q.category, cents: q.cents }); }
+    if (q.type === 'removeBudget') b = b.filter(x => x.category !== q.category);
+  });
+  return b;
+}
+function spentBy(k) { const m = {}; inMonth(allReceipts(), k).forEach(r => r.lines.forEach(l => { m[l.category] = (m[l.category] || 0) + l.cents; })); return m; }
+const budClass = pct => pct > 100 ? 'bad' : pct >= 80 ? 'warn' : '';
+function avgLast3(cat) { const cm = monthKey(new Date()); let t = 0; for (let i = 1; i <= 3; i++) t += spentBy(shiftMonth(cm, -i))[cat] || 0; return Math.round(t / 3); }
+const monthNav = (id) => `<div class="row" style="justify-content:space-between;margin:2px 0 6px">
+      <button class="ib" data-act="monthPrev" aria-label="Previous month">${IC.back}</button>
+      <div style="text-align:center"><div style="font-weight:700;font-size:18px">${monthLabel(S.ui.month)}</div>${id ? `<div id="${id}" class="sm mute"></div>` : ''}</div>
+      <button class="ib" data-act="monthNext" aria-label="Next month" style="transform:scaleX(-1)">${IC.back}</button></div>`;
+function budRow(b) {
+  const pct = b.cents ? b.spent / b.cents * 100 : 0, over = b.spent > b.cents;
+  return `<button class="card bud" data-act="budEdit" data-c="${esc(b.category)}"><div class="row" style="justify-content:space-between"><b>${esc(b.category)}</b><span>${fmt(b.spent)} <span class="mute">of ${fmt(b.cents)}</span></span></div>
+    <div class="bar ${budClass(pct)}"><b style="width:${Math.min(100, Math.round(pct))}%"></b></div>
+    <div class="sm ${over ? '' : 'mute'}" style="margin-top:6px;${over ? 'color:var(--bad)' : ''}">${over ? 'Over by ' + fmt(b.spent - b.cents) : fmt(b.cents - b.spent) + ' left'}</div></button>`;
+}
+function viewBudgets() {
+  const k = S.ui.month, spent = spentBy(k);
+  const bs = effBudgets().map(b => ({ ...b, spent: spent[b.category] || 0 })).sort((a, b) => (b.spent / b.cents) - (a.spent / a.cents));
+  const total = bs.reduce((t, b) => t + b.cents, 0), used = bs.reduce((t, b) => t + b.spent, 0);
+  const none = Object.entries(spent).filter(([c]) => !bs.some(b => b.category === c)).sort((a, b) => b[1] - a[1]);
+  const left = total - used;
+  return `${monthNav()}
+    ${bs.length ? `<div class="hero"><div class="lbl">Left in budgeted categories</div><div class="big" style="color:${left < 0 ? 'var(--bad)' : 'var(--ink)'}">${fmt(left)}</div><div class="sm mute">Budgeted ${fmt(total)} · Spent ${fmt(used)}</div></div>
+      ${bs.map(budRow).join('')}`
+      : `<div class="card soon"><h3>No budgets yet</h3><p class="mute">Set a monthly limit for a category and a bar fills as you spend.</p></div>`}
+    ${none.length ? `<h2>Not budgeted</h2><div class="card">${none.slice(0, 8).map(([c, v]) => `<div class="row" style="justify-content:space-between;padding:6px 0"><span>${esc(c)}</span><span>${fmt(v)} <button class="link" data-act="budNew" data-c="${esc(c)}">Set</button></span></div>`).join('')}</div>` : ''}
+    <button class="btn pri block" style="margin-top:6px" data-act="budNew" data-c="">${IC.plus} Add a budget</button>`;
+}
+function budHint(cat) { return cat ? 'Average spent here over the last 3 months: ' + fmt(avgLast3(cat)) : ''; }
+function viewBudgetForm() {
+  if (!S.budDraft) S.budDraft = { category: '', amt: '', existing: false };
+  const d = S.budDraft;
+  return `<form data-form="budget" autocomplete="off">
+    <label for="b-cat">Category</label>
+    <select id="b-cat" data-bd="category" ${d.existing ? 'disabled' : ''}>${catOpts(d.category)}</select>
+    <label for="b-amt">Monthly limit</label>
+    <input class="amt" id="b-amt" data-bd="amt" inputmode="decimal" placeholder="0.00" value="${esc(d.amt)}">
+    <div id="b-hint" class="sm mute" style="margin-top:8px">${esc(budHint(d.category))}</div>
+    <div id="err" class="err" hidden></div><div class="gap"></div>
+    <button class="btn pri block">Save budget</button>
+    ${d.existing ? `<button type="button" class="btn bad block" style="margin-top:10px" data-act="budDel">${IC.trash} Remove budget</button>` : ''}
+  </form>`;
+}
+function budgetAlertsHTML() {
+  const spent = spentBy(monthKey(new Date()));
+  const risk = effBudgets().map(b => ({ ...b, spent: spent[b.category] || 0 })).filter(b => b.cents && b.spent / b.cents >= 0.8).sort((a, b) => (b.spent / b.cents) - (a.spent / a.cents));
+  if (!risk.length) return '';
+  return `<div class="sec-h"><h2>Budgets</h2><button class="link" data-go="/expenses/budgets">See all</button></div>${risk.slice(0, 3).map(budRow).join('')}`;
+}
+
+/* ---- Bills ---- */
+const BILL_FREQS = ['Monthly', 'Weekly', 'Every 2 weeks', 'Yearly'];
+const daysIn = (y, m) => new Date(y, m + 1, 0).getDate();
+// Moves a due date forward one period. Monthly and yearly bills keep their day of the month, clamped for short months.
+function nextDueAfter(dateStr, freq, day) {
+  const d = parseYMD(dateStr), dd = day || d.getDate();
+  if (freq === 'Weekly') d.setDate(d.getDate() + 7);
+  else if (freq === 'Every 2 weeks') d.setDate(d.getDate() + 14);
+  else { const add = freq === 'Yearly' ? 12 : 1; d.setDate(1); d.setMonth(d.getMonth() + add); d.setDate(Math.min(dd, daysIn(d.getFullYear(), d.getMonth()))); }
+  return ymd(d);
+}
+function effBills() {
+  let b = S.bills.map(x => ({ ...x }));
+  S.queue.forEach(q => {
+    if (q.type === 'saveBill') { const i = b.findIndex(x => x.id === q.bill.id); if (i >= 0) b[i] = { ...q.bill }; else b.push({ ...q.bill }); }
+    if (q.type === 'removeBill') b = b.filter(x => x.id !== q.id);
+  });
+  return b.filter(x => x.active !== false).sort((a, c) => a.nextDue.localeCompare(c.nextDue));
+}
+const billMonthly = b => Math.round(({ 'Weekly': b.cents * 52 / 12, 'Every 2 weeks': b.cents * 26 / 12, 'Monthly': b.cents, 'Yearly': b.cents / 12 })[b.freq] || 0);
+const daysUntil = s => Math.round((parseYMD(s) - parseYMD(ymd(new Date()))) / 86400000);
+function dueLabel(s) { const n = daysUntil(s); return n < -1 ? 'Overdue by ' + (-n) + ' days' : n === -1 ? 'Overdue by 1 day' : n === 0 ? 'Due today' : n === 1 ? 'Due tomorrow' : 'Due ' + dayLabel(s); }
+function billCard(b) {
+  const late = daysUntil(b.nextDue) < 0;
+  return `<div class="card"><div class="row"><div class="grow"><div class="rc-name">${esc(b.name)}</div><div class="rc-sub">${esc(dueLabel(b.nextDue))} · ${esc(b.freq)} · ${esc(b.category)}</div>${late ? '<span class="tag warn">Overdue</span>' : ''}</div><div class="rc-amt">${fmt(b.cents)}</div></div>
+    <div class="row" style="margin-top:10px"><button class="btn pri grow" data-act="billPay" data-id="${esc(b.id)}">Mark paid</button><button class="btn" data-act="billEdit" data-id="${esc(b.id)}">Edit</button></div></div>`;
+}
+function viewBills() {
+  const bs = effBills(), monthly = bs.reduce((t, b) => t + billMonthly(b), 0);
+  return `${bs.length ? `<div class="hero"><div class="lbl">Bills and subscriptions</div><div class="big">${fmt(monthly)}</div><div class="sm mute">About a month, across ${bs.length} ${bs.length === 1 ? 'bill' : 'bills'}</div></div>${bs.map(billCard).join('')}`
+    : `<div class="card soon"><h3>No bills yet</h3><p class="mute">Add rent, phone, streaming and the rest. Home shows what is due soon, and Mark paid logs the expense for you.</p></div>`}
+    <button class="btn pri block" style="margin-top:6px" data-go="/expenses/bill">${IC.plus} Add a bill</button>`;
+}
+function newBillDraft() { return { id: '', name: '', amt: '', category: '', freq: 'Monthly', nextDue: ymd(new Date()), existing: false }; }
+function viewBillForm() {
+  if (!S.billDraft) S.billDraft = newBillDraft();
+  const d = S.billDraft;
+  return `<form data-form="bill" autocomplete="off">
+    <label for="bl-name">Bill</label><input id="bl-name" data-bl="name" autocapitalize="words" placeholder="Rent, phone, streaming" value="${esc(d.name)}">
+    <label for="bl-amt">Amount</label><input class="amt" id="bl-amt" data-bl="amt" inputmode="decimal" placeholder="0.00" value="${esc(d.amt)}">
+    <label for="bl-cat">Category</label><select id="bl-cat" data-bl="category">${catOpts(d.category)}</select>
+    <label for="bl-freq">How often</label><select id="bl-freq" data-bl="freq">${BILL_FREQS.map(f => `<option ${f === d.freq ? 'selected' : ''}>${f}</option>`).join('')}</select>
+    <label for="bl-due">Next due</label><input id="bl-due" type="date" data-bl="nextDue" value="${esc(d.nextDue)}">
+    <div id="err" class="err" hidden></div><div class="gap"></div>
+    <button class="btn pri block">Save bill</button>
+    ${d.existing ? `<button type="button" class="btn bad block" style="margin-top:10px" data-act="billDel">${IC.trash} Delete bill</button>` : ''}
+  </form>`;
+}
+function billsDueHTML() {
+  const due = effBills().filter(b => daysUntil(b.nextDue) <= 7);
+  if (!due.length) return '';
+  return `<div class="sec-h"><h2>Bills due soon</h2><button class="link" data-go="/expenses/bills">See all</button></div>${due.slice(0, 3).map(billCard).join('')}`;
+}
+function payBill(id) {
+  const b = effBills().find(x => x.id === id); if (!b) return;
+  const rc = { id: uid(), date: ymd(new Date()), merchant: b.name, paidBy: S.prefs.paidBy || S.meta.people[0], account: S.prefs.account || '', note: 'Bill', lines: [{ category: b.category, cents: b.cents }] };
+  const nb = { ...b, nextDue: nextDueAfter(b.nextDue, b.freq, b.day) };
+  S.queue.push({ type: 'add', receipt: rc }, { type: 'saveBill', bill: nb }); saveQ();
+  renderKeep();
+  toast('Paid ' + b.name + '. Next due ' + dayLabel(nb.nextDue), 'Undo', () => { undoAdd(rc.id); S.queue.push({ type: 'saveBill', bill: b }); saveQ(); renderKeep(); flush(); });
+  flush();
+}
+
+/* ---- Notes ---- */
+function effNotes() {
+  const gone = new Set(S.queue.filter(q => q.type === 'removeNote').map(q => q.id));
+  const m = new Map(S.notes.filter(n => !gone.has(n.id)).map(n => [n.id, n]));
+  S.queue.forEach(q => { if (q.type === 'addNote' && !m.has(q.note.id) && !gone.has(q.note.id)) m.set(q.note.id, { ...q.note, pending: true }); });
+  return [...m.values()].sort((a, b) => a.ts - b.ts);
+}
+const notesFor = id => effNotes().filter(n => n.entryId === id);
+function whenLabel(ts) { const d = new Date(ts), t = d.toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit' }); return ymd(d) === ymd(new Date()) ? 'Today ' + t : dayLabel(ymd(d)) + ' ' + t; }
+function threadHTML(r) {
+  const ns = notesFor(r.id);
+  return `<div class="thread"><div class="sec-t" style="margin-top:12px">Notes</div>
+    ${ns.map(n => `<div class="nt"><div><b>${esc(n.author)}</b> <span class="mute sm">${esc(whenLabel(n.ts))}${n.pending ? ' · Waiting to sync' : ''}</span></div><div>${esc(n.text)}</div></div>`).join('') || '<div class="sm mute">No notes yet.</div>'}
+    <form data-form="note" data-id="${esc(r.id)}" class="row" style="margin-top:8px" autocomplete="off"><input name="text" maxlength="300" placeholder="Add a note" aria-label="Add a note"><button class="btn pri" style="height:48px">Send</button></form></div>`;
+}
+
+/* ---- Activity feed ---- */
+function activity() {
+  const items = [], rcs = allReceipts(), byId = new Map(rcs.map(r => [r.id, r]));
+  rcs.forEach(r => items.push({ key: r.date + 'T00:00', kind: 'exp', id: r.id, month: r.date.slice(0, 7), who: r.paidBy, title: r.merchant, sub: dayLabel(r.date) + ' · ' + [...new Set(r.lines.map(l => l.category))].join(', '), amt: fmt(r.total), pending: r.pending }));
+  effIncome().forEach(r => items.push({ key: r.date + 'T00:00', kind: 'inc', id: r.id, month: r.date.slice(0, 7), who: r.person, title: r.job, sub: 'Paycheque · ' + dayLabel(r.date), amt: '+' + fmt(r.net), pending: r.pending }));
+  effNotes().forEach(n => { const r = byId.get(n.entryId), d = new Date(n.ts); if (!r) return; items.push({ key: ymd(d) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()), kind: 'note', id: n.entryId, month: r.date.slice(0, 7), who: n.author, title: n.text.length > 70 ? n.text.slice(0, 70) + '…' : n.text, sub: 'Note on ' + r.merchant + ' · ' + whenLabel(n.ts), amt: '', pending: n.pending }); });
+  return items.sort((a, b) => b.key.localeCompare(a.key)).slice(0, 8);
+}
+function activityHTML() {
+  const items = activity();
+  if (!items.length) return `<div class="card soon"><h3>No entries yet</h3><p class="mute">Tap Add expense to log your first one.</p></div>`;
+  return items.map(it => `<button class="card act" data-act="actOpen" data-k="${it.kind}" data-id="${esc(it.id)}" data-month="${it.month}"><span class="av">${esc((it.who || '?')[0].toUpperCase())}</span><span class="act-t"><b>${esc((it.who ? it.who + ' · ' : '') + it.title)}</b><span class="sm mute">${esc(it.sub)}${it.pending ? ' · Waiting to sync' : ''}</span></span><span class="act-a" ${it.kind === 'inc' ? 'style="color:var(--acc)"' : ''}>${esc(it.amt)}</span></button>`).join('');
+}
+
 /* ================= Routes ================= */
 const TABS = {
   Home: [['Overview', '/home'], ['Reports', '/home/reports']],
@@ -346,7 +579,7 @@ const TABS = {
 };
 const soon = (group, tab, phase, text) => ({ title: group, top: 1, group, render: () => `<div class="card soon"><div class="badge">Coming in phase ${phase}</div><h3>${esc(tab)}</h3><p class="mute">${esc(text)}</p></div>` });
 const ROUTES = {
-  '/home': { title: 'Home', top: 1, group: 'Home', render: viewHome },
+  '/home': { title: 'Home', top: 1, group: 'Home', render: viewHome, after: afterHome },
   '/home/reports': soon('Home', 'Reports', 6, 'Month over month and year over year trends, with 1M, 3M, 6M, and 1Y zoom.'),
   '/income': { title: 'Income', top: 1, group: 'Income', render: viewPaycheques, after: renderIncomeList, action: '/income/pay' },
   '/income/jobs': { title: 'Income', top: 1, group: 'Income', render: viewJobs, action: '/income/job' },
@@ -356,8 +589,10 @@ const ROUTES = {
   '/expenses/add': { title: 'Add expense', parent: '/expenses', crumb: 'Expenses', render: viewAdd, after: afterAdd },
   '/expenses/scan': { title: () => (S.scan && S.scan.source && S.scan.source !== 'photo' ? 'Check receipt' : 'Scan receipt'), parent: '/expenses', crumb: 'Expenses', render: viewScan },
   '/expenses/paste': { title: 'Paste receipt text', parent: '/expenses', crumb: 'Expenses', render: viewPaste },
-  '/expenses/budgets': soon('Expenses', 'Budgets', 4, 'A monthly limit for each category and a bar that fills as you spend.'),
-  '/expenses/bills': soon('Expenses', 'Bills', 4, 'Recurring bills and subscriptions with due dates and reminders.'),
+  '/expenses/budgets': { title: 'Expenses', top: 1, group: 'Expenses', render: viewBudgets, action: '/expenses/budget' },
+  '/expenses/budget': { title: () => (S.budDraft && S.budDraft.existing ? 'Edit budget' : 'Add budget'), parent: '/expenses/budgets', crumb: 'Budgets', render: viewBudgetForm },
+  '/expenses/bills': { title: 'Expenses', top: 1, group: 'Expenses', render: viewBills, action: '/expenses/bill' },
+  '/expenses/bill': { title: () => (S.billDraft && S.billDraft.existing ? 'Edit bill' : 'Add bill'), parent: '/expenses/bills', crumb: 'Bills', render: viewBillForm },
   '/accounts': soon('Accounts', 'Balances', 5, 'Chequing, savings, cards, and debts rolled into one net worth line, plus statement import.'),
   '/accounts/investments': soon('Accounts', 'Investments', 5, 'Holdings by account with contributions, room left, and growth over time.'),
   '/planning': soon('Planning', 'Goals', 6, 'Goals with a target, a date, and progress.'),
@@ -463,14 +698,15 @@ function viewConnect(view) {
 function rcHTML(r, expandable) {
   const cats = [...new Set(r.lines.map(l => l.category))];
   const sub = (cats.length > 1 ? 'Split across ' + cats.length : cats[0]) + ' · ' + (r.paidBy || 'Not set');
-  const tags = (r.flag ? '<div><span class="tag warn">Above usual</span></div>' : '') + (r.pending ? '<div><span class="tag mute">Waiting to sync</span></div>' : '');
+  const tags = (r.flag ? '<div><span class="tag warn">Above usual</span></div>' : '') + (r.pending ? '<div><span class="tag mute">Waiting to sync</span></div>' : '') + (notesFor(r.id).length ? `<div><span class="tag mute">${notesFor(r.id).length} ${notesFor(r.id).length === 1 ? 'note' : 'notes'}</span></div>` : '');
   const open = expandable && S.ui.open[r.id];
   const detail = open ? `<div class="rc-detail">
       ${r.lines.map(l => `<div class="ln"><span>${esc(l.category)}</span><span>${fmt(l.cents)}</span></div>`).join('')}
       ${r.account ? `<div class="sm mute" style="margin-top:6px">Account: ${esc(r.account)}</div>` : ''}
       ${r.note ? `<div class="sm mute">Note: ${esc(r.note)}</div>` : ''}
       ${r.flag ? `<div class="sm" style="color:var(--warn);margin-top:6px">${esc(r.flag.category)} is ${r.flag.ratio.toFixed(1)}x its usual average.</div>` : ''}
-      <div style="margin-top:10px"><button class="btn bad" data-act="del" data-id="${esc(r.id)}">${IC.trash} Delete</button></div>
+      ${threadHTML(r)}
+      <div class="row" style="margin-top:12px">${hasPic(r.id) ? `<button class="btn grow" data-act="viewPic" data-id="${esc(r.id)}">${IC.camera} Receipt photo</button>` : ''}<button class="btn bad ${hasPic(r.id) ? '' : 'grow'}" data-act="del" data-id="${esc(r.id)}">${IC.trash} Delete</button></div>
     </div>` : '';
   const attrs = expandable ? `data-act="toggle" data-id="${esc(r.id)}"` : `data-act="openMonth" data-month="${esc(r.date.slice(0, 7))}"`;
   return `<div class="card rc"><button class="rc-main" ${attrs}>
@@ -493,11 +729,12 @@ function viewHome() {
     : `<div class="hero"><div class="lbl">Spent in ${monthLabel(cm)}</div><div class="big">${fmt(spent)}</div><div class="sm mute">${prev.length ? monthLabel(pm) + ': ' + fmt(pspent) + ' \u00b7 ' : ''}<button class="link" data-go="/income/pay" style="padding:0;font-size:13px">Log a paycheque</button> to see what is left</div></div>`;
   return `${banner}${failed}${dueHTML()}${hero}
   <div class="row"><button class="btn pri grow" data-go="/expenses/add">${IC.plus} Add expense</button><button class="btn" data-act="scan" aria-label="Scan a receipt">${IC.camera}</button></div>
+  ${photosHTML()}${billsDueHTML()}${budgetAlertsHTML()}
   ${cats.length ? `<h2>By category</h2><div class="card">${shown.map(([c, v]) => `<div class="cat"><div class="row"><span>${esc(c)}</span><b>${fmt(v)}</b></div><div class="bar"><b style="width:${Math.max(3, Math.round(v / cats[0][1] * 100))}%"></b></div></div>`).join('')}
       ${cats.length > 5 ? `<button class="link" data-act="catsToggle">${S.ui.catsOpen ? 'Show fewer' : 'Show all ' + cats.length}</button>` : ''}</div>` : ''}
   ${flagged.length ? `<h2>Worth a look</h2><button class="link" data-act="flagsToggle" style="padding-left:2px">${flagged.length} above the usual ${S.ui.flagsOpen ? '(hide)' : '(show)'}</button>${S.ui.flagsOpen ? flagged.slice(0, 8).map(r => rcHTML(r, false)).join('') : ''}` : ''}
-  <div class="sec-h"><h2>Recent</h2><button class="link" data-go="/expenses">See all</button></div>
-  ${rs.length ? rs.slice(0, 5).map(r => rcHTML(r, false)).join('') : `<div class="card soon"><h3>No entries yet</h3><p class="mute">Tap Add expense to log your first one.</p></div>`}`;
+  <div class="sec-h"><h2>Recent activity</h2><button class="link" data-go="/expenses">See all</button></div>
+  ${activityHTML()}`;
 }
 
 function filteredReceipts() {
@@ -547,7 +784,10 @@ function viewAdd() {
   if (!S.draft) S.draft = newDraft();
   const d = S.draft, ppl = S.meta.people, accts = S.meta.accounts;
   const merchants = [...new Set(allReceipts().map(r => r.merchant))].slice(0, 60);
+  const photoCard = d.photo ? `<div class="card"><div class="row" style="align-items:flex-start"><img class="thumb" style="margin:0;max-width:72px;max-height:96px" src="${esc(d.photo)}" alt="Your receipt photo"><div class="grow"><b>Receipt photo kept on this phone</b><div class="sm mute">Type the details in from the photo, or paste its text. With a Sheet connected it can also be read for you.</div></div></div>
+      <div class="row" style="margin-top:10px"><button type="button" class="btn grow" data-act="pasteWithPhoto">Paste text</button><button type="button" class="btn grow" data-act="readPhoto">Read photo</button></div></div>` : '';
   return `<form data-form="add" autocomplete="off">
+    ${photoCard}
     <div class="row" style="margin-top:4px"><button type="button" class="btn grow" data-act="scan">${IC.camera} Scan receipt</button><button type="button" class="btn grow" data-act="pick">Choose photo</button></div>
     <button type="button" class="btn block" style="margin-top:8px" data-go="/expenses/paste">Paste receipt text</button>
     <label for="f-total">Amount</label>
@@ -660,17 +900,18 @@ function scanCalc() {
   sc.items.forEach((i, k) => { if (i.on) by.set(i.cat, (by.get(i.cat) || 0) + i.cents + shares[k]); });
   return { tax, sub, total: sub + tax, shares, lines: [...by].map(([category, cents]) => ({ category, cents })) };
 }
-async function shrink(file) {
+async function shrinkURL(file, max, q) {
   let bmp;
   try { bmp = await createImageBitmap(file, { imageOrientation: 'from-image' }); }
   catch (e) { bmp = await new Promise((res, rej) => { const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('That file is not a readable image.')); im.src = URL.createObjectURL(file); }); }
   const w = bmp.width || bmp.naturalWidth, h = bmp.height || bmp.naturalHeight;
-  const k = Math.min(1, 2200 / Math.max(w, h));
+  const k = Math.min(1, max / Math.max(w, h));
   const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
   const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(bmp, 0, 0, c.width, c.height);
   if (bmp.close) bmp.close();
-  return c.toDataURL('image/jpeg', 0.8).split(',')[1];
+  return c.toDataURL('image/jpeg', q);
 }
+const shrink = async file => (await shrinkURL(file, 2200, 0.8)).split(',')[1];
 // Reads the text of a receipt (from iPhone Scan Text or a copy and paste) with plain rules. No network.
 // Returns cents everywhere. Anything it cannot find comes back null or empty so the screen can say so.
 function parseReceiptText(raw, today) {
@@ -804,16 +1045,16 @@ function reviewFrom(r, thumb, source) {
     paidBy: S.prefs.paidBy || S.meta.people[0], account: S.prefs.account || '', note: ''
   };
 }
-async function runScan(makePayload, thumb, source) {
+async function runScan(makePayload, thumb, source, photoId) {
   const token = ++S.scanToken;
-  S.scan = { status: 'reading', thumb, source };
+  S.scan = { status: 'reading', thumb, source, photoId: photoId || '' };
   go('/expenses/scan');
   try {
     const j = await api('scan', typeof makePayload === 'function' ? await makePayload() : makePayload);
     if (token !== S.scanToken || !S.scan) return;
     const r = j.receipt;
     if (!r.items || !r.items.length) throw new Error(source === 'photo' ? 'No items were found on that photo. Try again in better light, or add it by hand.' : 'No items were found in that text. Check that the item lines are included, or add it by hand.');
-    S.scan = reviewFrom(r, S.scan.thumb, source);
+    S.scan = { ...reviewFrom(r, S.scan.thumb, source), photoId: S.scan.photoId };
   } catch (e) {
     if (token !== S.scanToken || !S.scan) return;
     const msg = e.server ? e.message : (e.name === 'TypeError' || e.name === 'AbortError') ? 'Could not reach your Sheet. Check your connection and try again.' : (e.message || 'Could not read that receipt.');
@@ -821,10 +1062,9 @@ async function runScan(makePayload, thumb, source) {
   }
   if (curPath() === '/expenses/scan') render();
 }
-const startScan = file => runScan(async () => ({ image: await shrink(file) }), URL.createObjectURL(file), 'photo');
 function viewPaste() {
   if (!S.paste) S.paste = { text: '' };
-  return `<div class="sm mute" style="margin:6px 0 10px">Tap in the box, then choose Scan Text from the popup menu or the camera icon on the keyboard, and point the phone at the receipt. You can also paste text you copied from a photo.</div>
+  return `${S.pastePhoto ? `<img class="thumb" src="${esc(S.pastePhoto.url)}" alt="Your receipt photo">` : ''}<div class="sm mute" style="margin:6px 0 10px">Tap in the box, then choose Scan Text from the popup menu or the camera icon on the keyboard, and point the phone at the receipt. You can also paste text you copied from a photo.</div>
     <textarea id="p-t" data-pt rows="12" placeholder="Receipt text goes here" aria-label="Receipt text">${esc(S.paste.text)}</textarea>
     <div class="gap"></div>
     <button class="btn pri block" data-act="readText">Read this text</button>
@@ -862,7 +1102,7 @@ function viewScan() {
   const thumb = sc.thumb ? `<img class="thumb" src="${esc(sc.thumb)}" alt="Your receipt photo">` : '';
   if (sc.status === 'reading') return `<div class="card soon">${thumb}${LOADER(84)}<h3>Reading your receipt</h3><p class="mute">This takes a few seconds.</p></div>`;
   if (sc.status === 'error') return `<div class="card soon">${thumb}<h3>Could not read that one</h3><p class="mute">${esc(sc.error)}</p>
-    <div class="stack">${sc.source === 'photo' ? `<button class="btn pri block" data-act="scan">${IC.camera} Try again</button><button class="btn block" data-act="pick">Choose photo</button><button class="btn block" data-go="/expenses/paste">Paste text instead</button>` : `<button class="btn pri block" data-go="/expenses/paste">Back to the text</button>`}<button class="btn block" data-go="/expenses/add">Enter by hand</button></div></div>`;
+    <div class="stack">${sc.source === 'photo' ? `<button class="btn pri block" data-act="scan">${IC.camera} Try again</button><button class="btn block" data-act="pick">Choose photo</button><button class="btn block" data-act="pasteWithPhoto">Paste text instead</button>${sc.photoId ? '<button class="btn block" data-act="useShot">Fill it in by hand with this photo</button>' : ''}` : `<button class="btn pri block" data-go="/expenses/paste">Back to the text</button>`}<button class="btn block" data-go="/expenses/add">Enter by hand</button></div></div>`;
   const accts = S.meta.accounts;
   return `<form data-form="scan" autocomplete="off">
     <div class="row" style="align-items:flex-start;margin:4px 0 2px">${sc.thumb ? `<img class="thumb" style="margin:0;max-width:64px;max-height:84px" src="${esc(sc.thumb)}" alt="Your receipt photo">` : ''}<div class="sm mute">${sc.source === 'text' ? 'Read from the text on this phone. Check each line, set the categories, then save.' : sc.source === 'text-ai' ? 'Sorted by Gemini from your text. Check each line, then save.' : 'Read from your receipt. Check each line, fix anything wrong, then save.'}</div></div>
@@ -1086,8 +1326,47 @@ async function connect(url, pin, errBox) {
 const ACTS = {
   menu: openDrawer, closeDrawer, back,
   sync: () => { if (!S.cfg.url) { go('/settings'); toast('Connect your Sheet below.'); return; } flush(); },
-  scan: () => { if (!S.cfg.url) { toast('Connect your Sheet in Settings to scan photos. Paste text works without it.'); return; } if (!navigator.onLine) { toast('Scanning needs a connection. Add it by hand for now.'); return; } $('#cam').click(); },
-  pick: () => { if (!S.cfg.url) { toast('Connect your Sheet in Settings to scan photos. Paste text works without it.'); return; } if (!navigator.onLine) { toast('Scanning needs a connection. Add it by hand for now.'); return; } $('#pick').click(); },
+  scan: () => { $('#cam').click(); },
+  pick: () => { $('#pick').click(); },
+  readPhoto: () => {
+    const d = S.draft; if (!d || !d.photo) return;
+    if (!S.cfg.url) { toast('Connect your Sheet in Settings and this photo can be read for you. You can still type it in or paste its text.'); return; }
+    if (!navigator.onLine) { toast('Reading needs a connection. Type it in for now.'); return; }
+    keepPhotoId(d.photoId);
+    runScan({ image: d.photo.split(',')[1] }, d.photo, 'photo', d.photoId);
+  },
+  pasteWithPhoto: () => {
+    const d = S.draft && S.draft.photoId ? { id: S.draft.photoId, url: S.draft.photo } : S.scan && S.scan.photoId ? { id: S.scan.photoId, url: S.scan.thumb } : null;
+    S.pastePhoto = d; if (d) keepPhotoId(d.id);
+    go('/expenses/paste');
+  },
+  useShot: () => { const sc = S.scan; if (!sc || !sc.photoId) return; keepPhotoId(sc.photoId); openPhoto(sc.photoId, sc.thumb); },
+  phOpen: async t => { const id = t.dataset.id, d = await PH.get(id); if (!d) { S.photos = S.photos.filter(p => p.id !== id); store.set('photos', S.photos); renderKeep(); toast('That photo is no longer on this phone.'); return; } openPhoto(id, d); },
+  phDel: async t => { if (!(await confirmDialog('Discard this photo?', 'It will be removed from this phone.', 'Discard'))) return; const id = t.dataset.id; S.photos = S.photos.filter(p => p.id !== id); store.set('photos', S.photos); PH.del(id); renderKeep(); },
+  viewPic: async t => { const d = await PH.get('r_' + t.dataset.id); if (d) showPic(d); else toast('That photo is no longer on this phone.'); },
+  budNew: t => { S.budDraft = { category: t.dataset.c || '', amt: '', existing: false }; go('/expenses/budget'); },
+  budEdit: t => { const b = effBudgets().find(x => x.category === t.dataset.c); if (!b) return; S.budDraft = { category: b.category, amt: (b.cents / 100).toFixed(2), existing: true, prev: b.cents }; go('/expenses/budget'); },
+  budDel: () => {
+    const d = S.budDraft; if (!d) return; const prev = d.prev, cat = d.category;
+    S.queue.push({ type: 'removeBudget', category: cat }); saveQ(); S.budDraft = null;
+    if (S.stack.length > 1 && S.stack[S.stack.length - 2] === '/expenses/budgets') history.back(); else go('/expenses/budgets');
+    toast('Removed the ' + cat + ' budget', 'Undo', () => { S.queue.push({ type: 'saveBudget', category: cat, cents: prev }); saveQ(); renderKeep(); flush(); });
+    flush();
+  },
+  billPay: t => payBill(t.dataset.id),
+  billEdit: t => { const b = effBills().find(x => x.id === t.dataset.id); if (!b) return; S.billDraft = { id: b.id, name: b.name, amt: (b.cents / 100).toFixed(2), category: b.category, freq: b.freq, nextDue: b.nextDue, existing: true, snap: b }; go('/expenses/bill'); },
+  billDel: () => {
+    const d = S.billDraft; if (!d) return; const snap = d.snap;
+    S.queue.push({ type: 'removeBill', id: d.id }); saveQ(); S.billDraft = null;
+    if (S.stack.length > 1 && S.stack[S.stack.length - 2] === '/expenses/bills') history.back(); else go('/expenses/bills');
+    toast('Deleted ' + snap.name, 'Undo', () => { S.queue.push({ type: 'saveBill', bill: snap }); saveQ(); renderKeep(); flush(); });
+    flush();
+  },
+  actOpen: t => {
+    const id = t.dataset.id, k = t.dataset.k, m = t.dataset.month;
+    if (k === 'inc') { S.ui.imonth = m; S.ui.iopen[id] = true; go('/income'); return; }
+    S.ui.month = m; S.ui.open[id] = true; S.ui.f = { person: 'All', cat: '', q: '' }; go('/expenses');
+  },
   readText: () => {
     const txt = ((S.paste && S.paste.text) || '').trim();
     if (txt.length < 8) { toast('Scan or paste the receipt text first.'); return; }
@@ -1096,7 +1375,8 @@ const ACTS = {
     if (!p.items.length) { S.scan = { status: 'error', source: 'text', error: 'No items were found in that text. Check that the item lines are included, or let Gemini sort it.' }; go('/expenses/scan'); return; }
     const cat = guessCat(p.merchant);
     S.scan = reviewFrom({ merchant: p.merchant, date: p.date, dateNote: p.dateNote, total: p.printed === null ? null : p.printed / 100, tax: p.tax / 100,
-      items: p.items.map(i => ({ description: i.desc, amount: i.cents / 100, section: '', category: cat, taxed: null })) }, '', 'text');
+      items: p.items.map(i => ({ description: i.desc, amount: i.cents / 100, section: '', category: cat, taxed: null })) }, S.pastePhoto ? S.pastePhoto.url : '', 'text');
+    if (S.pastePhoto) S.scan.photoId = S.pastePhoto.id;
     go('/expenses/scan');
   },
   readTextAI: () => {
@@ -1104,7 +1384,7 @@ const ACTS = {
     if (txt.length < 8) { toast('Scan or paste the receipt text first.'); return; }
     if (!S.cfg.url) { toast('Connect your Sheet in Settings to use Gemini. Read this text works without it.'); return; }
     if (!navigator.onLine) { toast('Gemini needs a connection. Use Read this text instead.'); return; }
-    runScan({ text: txt.slice(0, 6000) }, '', 'text-ai');
+    runScan({ text: txt.slice(0, 6000) }, S.pastePhoto ? S.pastePhoto.url : '', 'text-ai', S.pastePhoto ? S.pastePhoto.id : '');
   },
   rmitem: t => { S.scan.items.splice(+t.dataset.i, 1); $('#items').innerHTML = scanItemsHTML(); updateTotals(); },
   scanPaid: t => { S.scan.paidBy = t.dataset.v; t.parentElement.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === t)); },
@@ -1159,7 +1439,8 @@ const ACTS = {
   who2: t => { S.prefs.paidBy = t.dataset.v; store.set('prefs', S.prefs); renderKeep(); },
   forget: async () => {
     if (!(await confirmDialog('Forget this phone?', 'The link, PIN, and saved entries are removed from this phone. The Sheet is not touched. Anything still waiting to sync is lost.', 'Forget'))) return;
-    store.clear(); location.hash = ''; location.reload();
+    store.clear(); try { indexedDB.deleteDatabase('nestlog'); } catch (e) { /* ignore */ }
+    location.hash = ''; location.reload();
   },
   split: () => { const d = S.draft; d.split = true; if (d.cat) d.lines[0].category = d.cat; $('#single').hidden = true; $('#splitbox').hidden = false; $('#lines').innerHTML = linesHTML(); updateRest(); },
   unsplit: () => { const d = S.draft; d.split = false; if (!d.cat && d.lines[0].category) d.cat = d.lines[0].category; $('#splitbox').hidden = true; $('#single').hidden = false; $('#f-cat').innerHTML = catOpts(d.cat); },
@@ -1177,6 +1458,8 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('input', e => {
   const el = e.target;
+  if (el.dataset.bd !== undefined && S.budDraft) { S.budDraft[el.dataset.bd] = el.value; return; }
+  if (el.dataset.bl !== undefined && S.billDraft) { S.billDraft[el.dataset.bl] = el.value; return; }
   if (el.dataset.pt !== undefined && S.paste) { S.paste.text = el.value; return; }
   if (el.dataset.item !== undefined && S.scan) {
     if (el.dataset.k === 'amt') { const c = toCentsS(el.value); if (c !== null) { S.scan.items[+el.dataset.item].cents = c; updateTotals(); } }
@@ -1201,6 +1484,16 @@ document.addEventListener('input', e => {
 });
 document.addEventListener('change', e => {
   const el = e.target;
+  if (el.dataset.bd !== undefined && S.budDraft) {
+    if (el.dataset.bd === 'amt') { const c = toCents(el.value); if (c !== null && el.value.trim()) { el.value = (c / 100).toFixed(2); S.budDraft.amt = el.value; } }
+    if (el.dataset.bd === 'category') { S.budDraft.category = el.value; const h = $('#b-hint'); if (h) h.textContent = budHint(el.value); }
+    return;
+  }
+  if (el.dataset.bl !== undefined && S.billDraft) {
+    S.billDraft[el.dataset.bl] = el.value;
+    if (el.dataset.bl === 'amt') { const c = toCents(el.value); if (c !== null && el.value.trim()) { el.value = (c / 100).toFixed(2); S.billDraft.amt = el.value; } }
+    return;
+  }
   if (el.dataset.bulk !== undefined && S.scan) { if (el.value) { S.scan.items.forEach(i => { i.cat = el.value; }); $('#items').innerHTML = scanItemsHTML(); updateTotals(); } el.value = ''; return; }
   if (el.dataset.item !== undefined && S.scan) {
     const it = S.scan.items[+el.dataset.item];
@@ -1269,6 +1562,40 @@ document.addEventListener('submit', async e => {
     if (S.stack.length > 1 && S.stack[S.stack.length - 2] === '/income/jobs') history.back(); else go('/income/jobs');
     toast('Saved ' + name); flush();
   }
+  if (kind === 'budget') {
+    const d = S.budDraft; if (!d) return;
+    const cents = toCents(d.amt);
+    if (!d.category) { showErr('Choose a category.'); return; }
+    if (!cents || cents <= 0) { showErr('Enter a monthly limit greater than zero.'); return; }
+    const prev = d.existing ? d.prev : null;
+    S.queue.push({ type: 'saveBudget', category: d.category, cents }); saveQ(); S.budDraft = null;
+    if (S.stack.length > 1 && S.stack[S.stack.length - 2] === '/expenses/budgets') history.back(); else go('/expenses/budgets');
+    toast('Saved the ' + d.category + ' budget', 'Undo', () => { S.queue.push(prev ? { type: 'saveBudget', category: d.category, cents: prev } : { type: 'removeBudget', category: d.category }); saveQ(); renderKeep(); flush(); });
+    flush();
+  }
+  if (kind === 'bill') {
+    const d = S.billDraft; if (!d) return;
+    const name = cap(d.name), cents = toCents(d.amt);
+    if (!name) { showErr('Enter the name of the bill.'); return; }
+    if (!cents || cents <= 0) { showErr('Enter an amount greater than zero.'); return; }
+    if (!d.category) { showErr('Choose a category.'); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d.nextDue)) { showErr('Choose the next due date.'); return; }
+    const bill = { id: d.id || uid('b'), name, cents, category: d.category, freq: d.freq, nextDue: d.nextDue, day: parseYMD(d.nextDue).getDate(), active: true };
+    const snap = d.existing ? d.snap : null;
+    S.queue.push({ type: 'saveBill', bill }); saveQ(); S.billDraft = null;
+    if (S.stack.length > 1 && S.stack[S.stack.length - 2] === '/expenses/bills') history.back(); else go('/expenses/bills');
+    toast('Saved ' + name, 'Undo', () => { S.queue.push(snap ? { type: 'saveBill', bill: snap } : { type: 'removeBill', id: bill.id }); saveQ(); renderKeep(); flush(); });
+    flush();
+  }
+  if (kind === 'note') {
+    const text = String(fd.get('text') || '').trim(); if (!text) return;
+    const note = { id: uid('n'), entryId: f.dataset.id, author: S.prefs.paidBy || S.meta.people[0], text: text.slice(0, 300), ts: Date.now() };
+    S.queue.push({ type: 'addNote', note }); saveQ(); f.reset();
+    if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    renderKeep();
+    toast('Note added', 'Undo', () => { const i = S.queue.findIndex(q => q.type === 'addNote' && q.note.id === note.id && !q.sending); if (i >= 0) S.queue.splice(i, 1); else S.queue.push({ type: 'removeNote', id: note.id }); saveQ(); renderKeep(); flush(); });
+    flush();
+  }
   if (kind === 'scan') {
     const sc = S.scan; if (!sc || sc.status !== 'review') return;
     const c = scanCalc();
@@ -1283,6 +1610,7 @@ document.addEventListener('submit', async e => {
     const rc = { id: uid(), date: sc.date, merchant: sc.merchant.trim(), paidBy: sc.paidBy, account: sc.account, note: sc.note.trim(), lines: c.lines,
       items: sc.items.map((i, k) => ({ i, k })).filter(x => x.i.on).map(x => ({ description: x.i.desc, cents: x.i.cents, tax: c.shares[x.k], section: x.i.section, category: x.i.cat })) };
     S.queue.push({ type: 'add', receipt: rc }); saveQ();
+    if (sc.photoId) attachPhoto(sc.photoId, rc.id);
     S.prefs.paidBy = rc.paidBy; S.prefs.account = rc.account; store.set('prefs', S.prefs);
     S.ui.month = rc.date.slice(0, 7); S.scan = null; S.paste = null; S.scanToken++;
     replaceRoute('/expenses');
@@ -1292,8 +1620,9 @@ document.addEventListener('submit', async e => {
   if (kind === 'add') {
     const r = buildReceipt();
     if (r.error) { showErr(r.error); return; }
-    const rc = r.receipt;
+    const rc = r.receipt, pid = S.draft && S.draft.photoId;
     S.queue.push({ type: 'add', receipt: rc }); saveQ();
+    if (pid) attachPhoto(pid, rc.id);
     S.prefs.paidBy = rc.paidBy; S.prefs.account = rc.account; store.set('prefs', S.prefs);
     S.ui.month = rc.date.slice(0, 7); S.draft = null;
     const total = rc.lines.reduce((t, l) => t + l.cents, 0);
@@ -1324,7 +1653,7 @@ window.addEventListener('online', () => flush());
 // Pull down at the top of a screen to sync now. Not on entry forms, so a half finished entry is never disturbed.
 (function () {
   const view = $('#view'), box = $('#ptr');
-  const FORMS = ['/expenses/add', '/expenses/scan', '/expenses/paste', '/income/pay', '/income/job'];
+  const FORMS = ['/expenses/add', '/expenses/scan', '/expenses/paste', '/expenses/budget', '/expenses/bill', '/income/pay', '/income/job'];
   const SHOW = 44, DRAG = 0.45, READY = SHOW / DRAG; // finger travel needed before release counts
   let y0 = null, dy = 0, busy = false;
   const set = (h, txt) => { box.style.height = h + 'px'; if (txt !== undefined) box.textContent = txt; };
@@ -1358,16 +1687,22 @@ window.addEventListener('hashchange', () => {
   if (S.stack.length > 1 && S.stack[S.stack.length - 2] === p) S.stack.pop(); else if (S.stack[S.stack.length - 1] !== p) S.stack.push(p);
   // A half finished entry is cleared once you leave the Add screen.
   if (S.lastRoute === '/expenses/add' && p !== '/expenses/add') S.draft = null;
-  if (S.lastRoute === '/expenses/paste' && p !== '/expenses/paste' && p !== '/expenses/scan') S.paste = null;
-  if (S.lastRoute === '/expenses/scan' && p !== '/expenses/scan') { S.scan = null; S.scanToken++; if (p !== '/expenses/paste') S.paste = null; }
+  if (S.lastRoute === '/expenses/paste' && p !== '/expenses/paste' && p !== '/expenses/scan') { S.paste = null; S.pastePhoto = null; }
+  if (S.lastRoute === '/expenses/scan' && p !== '/expenses/scan') {
+    const pid = S.scan && S.scan.photoId; S.scan = null; S.scanToken++;
+    if (p !== '/expenses/paste') { S.paste = null; S.pastePhoto = null; }
+    if (pid && !S.photos.some(x => x.id === pid)) PH.del(pid); // a photo that was never kept or saved is dropped
+  }
+  if (S.lastRoute === '/expenses/budget' && p !== '/expenses/budget') S.budDraft = null;
+  if (S.lastRoute === '/expenses/bill' && p !== '/expenses/bill') S.billDraft = null;
   if (S.lastRoute === '/income/pay' && p !== '/income/pay') S.payDraft = null;
   if (S.lastRoute === '/income/job' && p !== '/income/job') S.jobDraft = null;
   closeDrawer(); render();
 });
 
-['cam', 'pick'].forEach(id => $('#' + id).addEventListener('change', e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) startScan(f); }));
+['cam', 'pick'].forEach(id => $('#' + id).addEventListener('change', e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) capture(f); }));
 document.querySelector('#lock h1').insertAdjacentHTML('afterbegin', MARK(34));
-window.__ledger = { parseReceiptText, spreadTax, advanceOnce, nextPayFor }; // test hook for the tax maths
+window.__ledger = { parseReceiptText, spreadTax, advanceOnce, nextPayFor, nextDueAfter }; // test hook for the tax maths
 
 { // Opening splash: the wiggling eggs for about a second, then fade out.
   const sp = $('#splash'); sp.innerHTML = LOADER(110);

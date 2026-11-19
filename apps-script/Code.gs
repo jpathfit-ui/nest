@@ -22,6 +22,10 @@ var DEFAULT_MODEL = 'gemini-3.6-flash';
 var INCOME_HEADERS = ['Entry ID', 'Date', 'Person', 'Job', 'Gross', 'Net', 'Deductions', 'Account', 'Note', 'Entered at'];
 var JOB_HEADERS = ['Job ID', 'Person', 'Job', 'Frequency', 'Typical net', 'Next pay date', 'Active'];
 var FREQS = ['Weekly', 'Every 2 weeks', 'Twice a month', 'Monthly', 'Irregular'];
+var BUDGET_HEADERS = ['Category', 'Monthly limit'];
+var BILL_HEADERS = ['Bill ID', 'Bill', 'Amount', 'Category', 'Frequency', 'Next due', 'Day of month', 'Active'];
+var BILL_FREQS = ['Monthly', 'Weekly', 'Every 2 weeks', 'Yearly'];
+var NOTE_HEADERS = ['Note ID', 'Entry ID', 'Author', 'Note', 'Created at'];
 var ITEM_HEADERS = ['Receipt ID', 'Date', 'Merchant', 'Item', 'Section', 'Category', 'Amount before tax', 'Tax share'];
 
 var EXPENSE_HEADERS = ['Receipt ID', 'Date', 'Merchant', 'Category', 'Note', 'Amount', 'Paid by', 'Account'];
@@ -173,6 +177,12 @@ function doPost(e) {
       case 'removeIncome': return out_(removeIncome_(req.id));
       case 'saveJob': return out_(saveJob_(req.job));
       case 'removeJob': return out_(removeJob_(req.id));
+      case 'saveBudget': return out_(saveBudget_(req.category, req.cents));
+      case 'removeBudget': return out_(removeBudget_(req.category));
+      case 'saveBill': return out_(saveBill_(req.bill));
+      case 'removeBill': return out_(removeBill_(req.id));
+      case 'addNote': return out_(addNote_(req.note));
+      case 'removeNote': return out_(removeNote_(req.id));
       default: return out_({ ok: false, error: 'Unknown action' });
     }
   } catch (err) {
@@ -249,7 +259,7 @@ function list_(req) {
       });
     }
   }
-  return { ok: true, rows: rows, income: incomeList_(ss, since), jobs: jobList_(ss), meta: meta_(ss, ex) };
+  return { ok: true, rows: rows, income: incomeList_(ss, since), jobs: jobList_(ss), budgets: budgetList_(ss), bills: billList_(ss), notes: noteList_(ss), meta: meta_(ss, ex) };
 }
 
 function add_(r) {
@@ -468,6 +478,130 @@ function removeJob_(id) {
   var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Jobs');
   var r = findRow_(sh, id);
   if (r > 0) sh.deleteRow(r); // past paycheques keep the job name as text, so history is untouched
+  return { ok: true, removed: r > 0 ? 1 : 0 };
+}
+
+/* ---------- Budgets, bills and notes ---------- */
+
+function budgetList_(ss) {
+  var sh = ss.getSheetByName('Budgets');
+  var out = [];
+  if (!sh || sh.getLastRow() < 2) return out;
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues();
+  for (var i = 0; i < vals.length; i++) {
+    if (!vals[i][0]) continue;
+    out.push({ category: String(vals[i][0]), limit: Number(vals[i][1]) || 0 });
+  }
+  return out;
+}
+
+function findCategoryRow_(sh, cat) {
+  if (!sh || sh.getLastRow() < 2) return -1;
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+  for (var i = 0; i < vals.length; i++) if (String(vals[i][0]) === cat) return i + 2;
+  return -1;
+}
+
+function saveBudget_(category, cents) {
+  var cat = clean_(category, 60);
+  if (!cat) throw new Error('Missing category');
+  if (!isCents_(cents, 1, 1000000000)) throw new Error('Bad amount');
+  var sh = ensureTab_(SpreadsheetApp.getActiveSpreadsheet(), 'Budgets', BUDGET_HEADERS);
+  var row = findCategoryRow_(sh, cat);
+  if (row < 0) row = sh.getLastRow() + 1;
+  sh.getRange(row, 1, 1, 2).setValues([[cat, cents / 100]]);
+  sh.getRange(row, 2).setNumberFormat('$#,##0.00');
+  return { ok: true };
+}
+
+function removeBudget_(category) {
+  var cat = clean_(category, 60);
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Budgets');
+  var r = findCategoryRow_(sh, cat);
+  if (r > 0) sh.deleteRow(r);
+  return { ok: true, removed: r > 0 ? 1 : 0 };
+}
+
+function billList_(ss) {
+  var sh = ss.getSheetByName('Bills');
+  var out = [];
+  if (!sh || sh.getLastRow() < 2) return out;
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, 8).getValues();
+  for (var i = 0; i < vals.length; i++) {
+    var v = vals[i];
+    if (!v[0]) continue;
+    out.push({
+      id: String(v[0]), name: String(v[1]), amount: Number(v[2]) || 0, category: String(v[3]),
+      freq: String(v[4]), nextDue: fmtDate_(v[5]), day: Number(v[6]) || 0,
+      active: !(v[7] === false || String(v[7]).toUpperCase() === 'FALSE')
+    });
+  }
+  return out;
+}
+
+function saveBill_(b) {
+  if (!b || typeof b !== 'object') throw new Error('Missing bill');
+  var id = String(b.id || '');
+  if (!validId_(id)) throw new Error('Bad bill id');
+  var name = clean_(b.name, 60), cat = clean_(b.category, 60);
+  if (!name || !cat) throw new Error('Missing bill name or category');
+  if (BILL_FREQS.indexOf(String(b.freq)) < 0) throw new Error('Bad frequency');
+  if (!isCents_(b.cents, 1, 1000000000)) throw new Error('Bad amount');
+  if (!isDate_(b.nextDue)) throw new Error('Bad due date');
+  var day = Number(b.day) >= 1 && Number(b.day) <= 31 ? Number(b.day) : toDate_(b.nextDue).getDate();
+  var sh = ensureTab_(SpreadsheetApp.getActiveSpreadsheet(), 'Bills', BILL_HEADERS);
+  var row = findRow_(sh, id);
+  if (row < 0) row = sh.getLastRow() + 1;
+  sh.getRange(row, 1, 1, 8).setValues([[id, name, b.cents / 100, cat, String(b.freq), toDate_(b.nextDue), day, b.active !== false]]);
+  sh.getRange(row, 3).setNumberFormat('$#,##0.00');
+  sh.getRange(row, 6).setNumberFormat('yyyy-mm-dd');
+  return { ok: true };
+}
+
+function removeBill_(id) {
+  id = String(id || '');
+  if (!id) throw new Error('Missing id');
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Bills');
+  var r = findRow_(sh, id);
+  if (r > 0) sh.deleteRow(r); // paid bills were already logged as expenses, so history is untouched
+  return { ok: true, removed: r > 0 ? 1 : 0 };
+}
+
+function noteList_(ss) {
+  var sh = ss.getSheetByName('Notes');
+  var out = [];
+  if (!sh || sh.getLastRow() < 2) return out;
+  var first = Math.max(2, sh.getLastRow() - 499); // the latest 500 notes is plenty for two people
+  var vals = sh.getRange(first, 1, sh.getLastRow() - first + 1, 5).getValues();
+  for (var i = 0; i < vals.length; i++) {
+    var v = vals[i];
+    if (!v[0]) continue;
+    out.push({ id: String(v[0]), entryId: String(v[1]), author: String(v[2]), text: String(v[3]), ts: v[4] instanceof Date ? v[4].getTime() : Number(v[4]) || 0 });
+  }
+  return out;
+}
+
+function addNote_(n) {
+  if (!n || typeof n !== 'object') throw new Error('Missing note');
+  var id = String(n.id || ''), entryId = String(n.entryId || '');
+  if (!validId_(id) || !validId_(entryId)) throw new Error('Bad note id');
+  var author = clean_(n.author, 40), text = clean_(n.text, 300);
+  if (!author || !text) throw new Error('Missing author or note');
+  var ts = Number(n.ts) > 0 ? Number(n.ts) : Date.now();
+  var sh = ensureTab_(SpreadsheetApp.getActiveSpreadsheet(), 'Notes', NOTE_HEADERS);
+  if (findRow_(sh, id) > 0) return { ok: true, duplicate: true }; // a retry must never double book
+  var row = sh.getLastRow() + 1;
+  sh.getRange(row, 1, 1, 5).setValues([[id, entryId, author, text, new Date(ts)]]);
+  sh.getRange(row, 5).setNumberFormat('yyyy-mm-dd hh:mm');
+  return { ok: true };
+}
+
+function removeNote_(id) {
+  id = String(id || '');
+  if (!id) throw new Error('Missing id');
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Notes');
+  var r = findRow_(sh, id);
+  if (r > 0) sh.deleteRow(r);
   return { ok: true, removed: r > 0 ? 1 : 0 };
 }
 

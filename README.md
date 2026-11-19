@@ -1,6 +1,6 @@
-# NestLog, phase 2 and 3 (income, jobs, and receipt scanning)
+# NestLog, phase 4 (budgets, bills, notes, and a camera that works offline)
 
-A household income and expense tracker for two phones, writing to a Google Sheet. It covers the menu and navigation, Add expense with single or split categories, receipt scanning, income and jobs for you and Sue, a Home view of what is left over each month, the PIN, sync, undo, delete, and CSV export. The other menu items are in place and say which phase fills them.
+A household income and expense tracker for two phones, writing to a Google Sheet. It covers the menu and navigation, Add expense with single or split categories, receipt scanning, income and jobs for you and Sue, a Home view of what is left over each month, the PIN, sync, undo, delete, and CSV export. Phase 4 adds budgets, recurring bills, notes on entries, a Home activity feed, and a camera that works with no Sheet connected. The other menu items are in place and say which phase fills them.
 
 ## Set up the Sheet (about 10 minutes, on a computer)
 
@@ -43,6 +43,26 @@ A household income and expense tracker for two phones, writing to a Google Sheet
 - Deleting a paycheque does not move the job's pay date back. Edit the job if you need to correct it.
 - Take-home pay is what counts toward Left over. Gross and deductions are stored for the Sheet.
 
+## Phase 4: update the Sheet script first
+
+Budgets, bills and notes need the newest `apps-script/Code.gs`. Paste it over the old one, then Deploy > Manage deployments > edit (pencil) > Version: New version > Deploy. The link stays the same, and the Budgets, Bills and Notes tabs appear in the Sheet the first time you save one. Until you do this, the app keeps working but those saves show a "Could not save" card on Home with a Try again button.
+
+## Camera with no Sheet connected
+
+The camera button works before the Sheet is connected, and when the signal is gone. The photo is shrunk and kept on the phone, and the Add expense form opens with it at the top so you can type the details in from the photo or paste its text. When you save, the photo stays with that entry (open the entry and tap Receipt photo). A photo you do not finish is kept on Home with Add expense and Discard buttons. With a Sheet connected and a signal, Read photo on the form reads it for you, and the camera reads receipts straight away as before. Photos never leave the phone unless you read one with Gemini.
+
+## Budgets
+
+Expenses > Budgets. Set a monthly limit for any category. The bar fills as you spend, turns orange from 80 percent and red when you are over. Home flags budgets that are close or over. Setting a budget shows the average you spent in that category over the last three months. Everything works offline and syncs to a Budgets tab.
+
+## Bills
+
+Expenses > Bills. Add recurring bills with an amount, category, how often (monthly, weekly, every 2 weeks, yearly) and the next due date. Bills due within a week show on Home. Mark paid logs the expense for you, moves the due date forward one period, and has Undo. Monthly and yearly bills keep their day of the month, so a bill due on the 31st lands on the 28th in February and goes back to the 31st after. Syncs to a Bills tab.
+
+## Notes and the activity feed
+
+Open any entry and add a note. Each note shows who wrote it and when, so you and Sue can ask and answer ("Is this the one-off?"). Undo takes a note back. Home now has Recent activity: the latest expenses, paycheques and notes with who added them, and tapping one opens it. Notes sync to a Notes tab. The feed uses who paid, so an entry logged by John for Sue shows as Sue.
+
 ## Paste receipt text
 
 On the Add expense screen, Paste receipt text opens a box. Tap in it and choose Scan Text (in the popup menu or on the keyboard) to read a receipt with the iPhone camera, or paste text you copied from a photo.
@@ -71,12 +91,18 @@ On the Add expense screen, Paste receipt text opens a box. Tap in it and choose 
 - The app locks after the idle time you choose in Settings. Five wrong PIN tries lock the script for 15 minutes.
 - Categories, people, and accounts are edited in the Sheet (Categories and Settings tabs) and appear in the app on the next sync.
 
+## Tests
+
+`node tests/test.js` drives the real app in a phone-sized browser against a fake Sheet. It needs Playwright installed. The tests live in this repository so they are never lost.
+
 ## What was and was not tested
 
 Tested: the app in a phone-sized browser against a simulated Sheet script (88 checks, plus 15 for pull to refresh, 28 for paste text and 33 for the text reader, including pay date rules across month ends, year ends, and clock changes), the script's real code against a simulated Google Sheet and a simulated Gemini reply (56 checks), and the tax split over 4,000 random receipts.
+
+Phase 4 adds `tests/test.js` (64 checks on the app: the offline camera, budgets, bills, notes, the activity feed, capital letters, reduce motion) and `tests/script-test.js` (21 checks running the real `Code.gs` against a fake Sheet).
 
 Not tested: the iPhone Scan Text button (the app only provides the box), the script inside real Google services, and the reader on real receipts with a real Gemini key, because neither is reachable from where this was built. Start with a few receipts you can check by eye, and expect to correct some lines at first. Photos in good light, flat, and filling the frame read best.
 
 ## Not built yet
 
-Budgets and bills (phase 4), accounts and statement import (phase 5), planning, what-ifs, mortgage, taxes, reports (phase 6). Editing an existing entry is delete and re-add for now. Receipt photos are not stored; only the extracted data is.
+Accounts and statement import (phase 5), planning, what-ifs, mortgage, taxes, reports (phase 6). Editing an existing entry is delete and re-add for now. Receipt photos are kept on the phone that took them only, so Sue will not see your photos on her phone.
