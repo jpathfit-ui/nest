@@ -145,6 +145,15 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--acc);outline-off
 .bud .bar>b{animation:fill .55s ease-out}
 @keyframes fill{from{width:0}}
 @media (prefers-reduced-motion:reduce){.bud .bar>b{animation:none}}
+.nwl{stroke-dasharray:1;animation:draw .8s ease-out}
+@keyframes draw{from{stroke-dashoffset:1}}
+@media (prefers-reduced-motion:reduce){.nwl{animation:none}}
+.nw{width:100%;height:auto;display:block;touch-action:manipulation}
+.nw text{fill:var(--mute);font-size:10px}
+.ac{display:flex;align-items:stretch;gap:0;padding:0;overflow:hidden}
+.ac .rc-main{flex:1;border-radius:0}
+.ac .ib{height:auto;width:48px;border-radius:0;border-left:1px solid var(--line)}
+.hist{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
 .nt{padding:6px 0;border-bottom:1px solid var(--line)}
 .nt:last-of-type{border-bottom:0}
 .act{display:flex;align-items:center;gap:12px;width:100%;text-align:left;cursor:pointer;padding:12px 14px;margin-bottom:8px}
@@ -225,6 +234,7 @@ const IC = {
   down: svg('<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>'),
   sheet: svg('<path d="M5 4h14v16H5zM5 10h14M10 4v16"/>'),
   trash: svg('<path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13"/>'),
+  edit: svg('<path d="M5 19l1-4L16 5l3 3L9 18zM14 7l3 3"/>'),
   x: svg('<path d="M6 6l12 12M18 6L6 18"/>')
 };
 
@@ -237,6 +247,7 @@ const S = {
   queue: store.get('queue', []).map(q => ({ ...q, sending: false })),
   failed: store.get('failed', []).map(f => f.op ? f : { op: { type: 'add', receipt: f.receipt }, label: f.receipt.merchant, reason: f.reason }),
   income: store.get('income', []), jobs: store.get('jobs', []),
+  accounts: store.get('accounts', []), balances: store.get('balances', []), acctDraft: null, balDraft: null,
   budgets: store.get('budgets', []), bills: store.get('bills', []), notes: store.get('notes', []), photos: store.get('photos', []), pics: store.get('pics', []),
   budDraft: null, billDraft: null, pastePhoto: null,
   ui: { month: monthKey(new Date()), f: { person: 'All', cat: '', q: '' }, open: {}, catsOpen: false, flagsOpen: false, imonth: monthKey(new Date()), ip: 'All', iopen: {} },
@@ -269,6 +280,8 @@ async function refresh() {
   if (Array.isArray(j.budgets)) { S.budgets = j.budgets.map(b => ({ category: b.category, cents: Math.round(b.limit * 100) })); store.set('budgets', S.budgets); }
   if (Array.isArray(j.bills)) { S.bills = j.bills.map(b => ({ id: b.id, name: b.name, cents: Math.round(b.amount * 100), category: b.category, freq: b.freq, nextDue: b.nextDue, day: b.day || 0, active: b.active !== false })); store.set('bills', S.bills); }
   if (Array.isArray(j.notes)) { S.notes = j.notes.map(n => ({ id: n.id, entryId: n.entryId, author: n.author, text: n.text, ts: n.ts })); store.set('notes', S.notes); }
+  if (Array.isArray(j.accounts)) { S.accounts = j.accounts.map(a => ({ id: a.id, name: a.name, type: a.type, owner: a.owner, active: a.active !== false })); store.set('accounts', S.accounts); }
+  if (Array.isArray(j.balances)) { S.balances = j.balances.map(b => ({ id: b.id, accountId: b.accountId, date: b.date, cents: Math.round(b.balance * 100) })); store.set('balances', S.balances); }
   S.lastSync = Date.now();
   store.set('rows', S.rows); store.set('meta', S.meta); store.set('income', S.income); store.set('jobs', S.jobs);
 }
@@ -277,12 +290,14 @@ function applyAdded(rc) {
   rc.lines.forEach(l => S.rows.push({ id: rc.id, date: rc.date, merchant: rc.merchant, category: l.category, note: rc.note, cents: l.cents, paidBy: rc.paidBy, account: rc.account, ratio: null }));
 }
 function opLabel(q) {
-  return q.type === 'add' ? q.receipt.merchant : q.type === 'addIncome' ? q.entry.job : q.type === 'saveJob' ? q.job.name : q.type === 'remove' ? 'a deleted expense' : q.type === 'removeIncome' ? 'a deleted paycheque' : q.type === 'saveBudget' || q.type === 'removeBudget' ? 'the ' + q.category + ' budget' : q.type === 'saveBill' ? q.bill.name : q.type === 'removeBill' ? 'a deleted bill' : q.type === 'addNote' ? 'a note' : q.type === 'removeNote' ? 'a deleted note' : 'a deleted job';
+  return q.type === 'add' || q.type === 'edit' ? q.receipt.merchant : q.type === 'addIncome' || q.type === 'editIncome' ? q.entry.job : q.type === 'saveJob' ? q.job.name : q.type === 'remove' ? 'a deleted expense' : q.type === 'removeIncome' ? 'a deleted paycheque' : q.type === 'saveBudget' || q.type === 'removeBudget' ? 'the ' + q.category + ' budget' : q.type === 'saveBill' ? q.bill.name : q.type === 'removeBill' ? 'a deleted bill' : q.type === 'saveAccount' ? q.account.name : q.type === 'removeAccount' ? 'a deleted account' : q.type === 'addBalance' ? 'a balance update' : q.type === 'removeBalance' ? 'a deleted balance' : q.type === 'addNote' ? 'a note' : q.type === 'removeNote' ? 'a deleted note' : 'a deleted job';
 }
 async function runOp(q) {
   if (q.type === 'add') { await api('add', { receipt: q.receipt }); applyAdded(q.receipt); }
+  else if (q.type === 'edit') { await api('edit', { receipt: q.receipt }); S.rows = S.rows.filter(r => r.id !== q.receipt.id); applyAdded(q.receipt); }
   else if (q.type === 'remove') { await api('remove', { id: q.id }); S.rows = S.rows.filter(r => r.id !== q.id); }
   else if (q.type === 'addIncome') { await api('addIncome', { entry: q.entry }); applyIncome(q.entry); }
+  else if (q.type === 'editIncome') { await api('editIncome', { entry: q.entry }); S.income = S.income.filter(r => r.id !== q.entry.id); applyIncome(q.entry); }
   else if (q.type === 'removeIncome') { await api('removeIncome', { id: q.id }); S.income = S.income.filter(r => r.id !== q.id); }
   else if (q.type === 'saveJob') { await api('saveJob', { job: q.job }); const i = S.jobs.findIndex(j => j.id === q.job.id); if (i >= 0) S.jobs[i] = { ...q.job }; else S.jobs.push({ ...q.job }); }
   else if (q.type === 'removeJob') { await api('removeJob', { id: q.id }); S.jobs = S.jobs.filter(j => j.id !== q.id); }
@@ -290,6 +305,10 @@ async function runOp(q) {
   else if (q.type === 'removeBudget') { await api('removeBudget', { category: q.category }); S.budgets = S.budgets.filter(b => b.category !== q.category); store.set('budgets', S.budgets); }
   else if (q.type === 'saveBill') { await api('saveBill', { bill: q.bill }); const i = S.bills.findIndex(b => b.id === q.bill.id); if (i >= 0) S.bills[i] = { ...q.bill }; else S.bills.push({ ...q.bill }); store.set('bills', S.bills); }
   else if (q.type === 'removeBill') { await api('removeBill', { id: q.id }); S.bills = S.bills.filter(b => b.id !== q.id); store.set('bills', S.bills); }
+  else if (q.type === 'saveAccount') { await api('saveAccount', { account: q.account }); const i = S.accounts.findIndex(a => a.id === q.account.id); if (i >= 0) S.accounts[i] = { ...q.account }; else S.accounts.push({ ...q.account }); store.set('accounts', S.accounts); }
+  else if (q.type === 'removeAccount') { await api('removeAccount', { id: q.id }); S.accounts = S.accounts.filter(a => a.id !== q.id); S.balances = S.balances.filter(b => b.accountId !== q.id); store.set('accounts', S.accounts); store.set('balances', S.balances); }
+  else if (q.type === 'addBalance') { await api('addBalance', { balance: q.balance }); if (!S.balances.some(b => b.id === q.balance.id)) S.balances.push({ ...q.balance }); store.set('balances', S.balances); }
+  else if (q.type === 'removeBalance') { await api('removeBalance', { id: q.id }); S.balances = S.balances.filter(b => b.id !== q.id); store.set('balances', S.balances); }
   else if (q.type === 'addNote') { await api('addNote', { note: q.note }); if (!S.notes.some(n => n.id === q.note.id)) S.notes.push({ ...q.note }); store.set('notes', S.notes); }
   else if (q.type === 'removeNote') { await api('removeNote', { id: q.id }); S.notes = S.notes.filter(n => n.id !== q.id); store.set('notes', S.notes); }
 }
@@ -332,6 +351,9 @@ async function flush() {
 /* ================= Data helpers ================= */
 function allReceipts() {
   const removed = new Set(S.queue.filter(q => q.type === 'remove').map(q => q.id));
+  // A saved edit that has not reached the Sheet yet replaces what the Sheet still holds.
+  const edits = new Map(S.queue.filter(q => q.type === 'edit').map(q => [q.receipt.id, q.receipt]));
+  const queuedAdds = new Set(S.queue.filter(q => q.type === 'add').map(q => q.receipt.id));
   const map = new Map();
   const put = (r, pending) => {
     let x = map.get(r.id);
@@ -340,8 +362,9 @@ function allReceipts() {
     x.total += r.cents;
     if (r.ratio !== null && r.ratio > S.meta.multiplier && (!x.flag || r.ratio > x.flag.ratio)) x.flag = { ratio: r.ratio, category: r.category };
   };
-  S.rows.forEach(r => { if (!removed.has(r.id)) put(r, false); });
-  S.queue.forEach(q => { if (q.type === 'add') q.receipt.lines.forEach(l => put({ ...q.receipt, category: l.category, cents: l.cents, ratio: null }, true)); });
+  S.rows.forEach(r => { if (!removed.has(r.id) && !edits.has(r.id)) put(r, false); });
+  S.queue.forEach(q => { if (q.type === 'add') { const rc = edits.get(q.receipt.id) || q.receipt; rc.lines.forEach(l => put({ ...rc, category: l.category, cents: l.cents, ratio: null }, true)); } });
+  edits.forEach((rc, id) => { if (!removed.has(id) && !queuedAdds.has(id)) rc.lines.forEach(l => put({ ...rc, category: l.category, cents: l.cents, ratio: null }, true)); });
   return [...map.values()].sort((a, b) => b.date.localeCompare(a.date));
 }
 const sum = rs => rs.reduce((t, r) => t + r.total, 0);
@@ -567,6 +590,132 @@ function activityHTML() {
   return items.map(it => `<button class="card act" data-act="actOpen" data-k="${it.kind}" data-id="${esc(it.id)}" data-month="${it.month}"><span class="av">${esc((it.who || '?')[0].toUpperCase())}</span><span class="act-t"><b>${esc((it.who ? it.who + ' · ' : '') + it.title)}</b><span class="sm mute">${esc(it.sub)}${it.pending ? ' · Waiting to sync' : ''}</span></span><span class="act-a" ${it.kind === 'inc' ? 'style="color:var(--acc)"' : ''}>${esc(it.amt)}</span></button>`).join('');
 }
 
+/* ---- Accounts, balances and net worth ---- */
+const ACCT_TYPES = [['Chequing', 0], ['Savings', 0], ['TFSA', 0], ['RRSP', 0], ['FHSA', 0], ['Investment', 0], ['Cash', 0], ['Property', 0], ['Other asset', 0], ['Credit card', 1], ['Line of credit', 1], ['Loan', 1], ['Mortgage', 1], ['Other debt', 1]];
+const isDebt = type => (ACCT_TYPES.find(t => t[0] === type) || [0, 0])[1] === 1;
+const STALE_DAYS = 35;
+function effAccounts() {
+  let list = S.accounts.map(a => ({ ...a }));
+  S.queue.forEach(q => {
+    if (q.type === 'saveAccount') { const i = list.findIndex(a => a.id === q.account.id); if (i >= 0) list[i] = { ...q.account }; else list.push({ ...q.account }); }
+    if (q.type === 'removeAccount') list = list.filter(a => a.id !== q.id);
+  });
+  return list;
+}
+function effBalances() {
+  const gone = new Set(S.queue.filter(q => q.type === 'removeAccount').map(q => q.id));
+  let list = S.balances.filter(b => !gone.has(b.accountId)).map(b => ({ ...b }));
+  S.queue.forEach(q => {
+    if (q.type === 'addBalance' && !list.some(b => b.id === q.balance.id)) list.push({ ...q.balance });
+    if (q.type === 'removeBalance') list = list.filter(b => b.id !== q.id);
+  });
+  return list;
+}
+function balAt(bals, id, date) {
+  let best = null;
+  bals.forEach(b => { if (b.accountId === id && b.date <= date && (!best || b.date >= best.date)) best = b; });
+  return best;
+}
+// Each account counts at its latest balance on or before the date. Debts are what you owe, so they subtract.
+function netAt(accts, bals, date) {
+  let assets = 0, debts = 0, tracked = 0;
+  accts.forEach(a => { const b = balAt(bals, a.id, date); if (!b) return; tracked++; if (isDebt(a.type)) debts += b.cents; else assets += b.cents; });
+  return { assets, debts, net: assets - debts, tracked };
+}
+const monthEnd = k => { const [y, m] = k.split('-').map(Number); return ymd(new Date(y, m, 0)); };
+function netTrend() {
+  const accts = effAccounts(), bals = effBalances(), now = monthKey(new Date()), pts = [];
+  for (let n = -11; n <= 0; n++) {
+    const k = shiftMonth(now, n), d = n === 0 ? ymd(new Date()) : monthEnd(k), r = netAt(accts, bals, d);
+    if (r.tracked) pts.push({ k, net: r.net });
+  }
+  return pts;
+}
+const daysAgo = date => Math.round((parseYMD(ymd(new Date())) - parseYMD(date)) / 864e5);
+function ageLabel(date) { const n = daysAgo(date); return n <= 0 ? 'today' : n === 1 ? 'yesterday' : n < 45 ? n + ' days ago' : Math.round(n / 30) + ' months ago'; }
+function signed(c) { return (c >= 0 ? 'Up ' : 'Down ') + fmt(Math.abs(c)); }
+function netChange() {
+  const accts = effAccounts(), bals = effBalances(), t = new Date(), ago = new Date(t.getFullYear(), t.getMonth() - 1, t.getDate());
+  const now = netAt(accts, bals, ymd(t)), before = netAt(accts, bals, ymd(ago));
+  return before.tracked ? { delta: now.net - before.net, since: dayLabel(ymd(ago)) } : null;
+}
+function chartHTML(pts) {
+  const W = 320, H = 120, L = 6, R = 6, T = 10, B = 22, n = pts.length;
+  const lo = Math.min(...pts.map(p => p.net)), hi = Math.max(...pts.map(p => p.net)), span = hi - lo || Math.max(Math.abs(hi), 100) * 0.1;
+  const x = i => L + (n === 1 ? (W - L - R) / 2 : i * (W - L - R) / (n - 1));
+  const y = v => T + (H - T - B) * (1 - (v - (lo - span * 0.1)) / (span * 1.2));
+  const line = pts.map((p, i) => x(i).toFixed(1) + ',' + y(p.net).toFixed(1)).join(' ');
+  const last = pts[n - 1], col = (W - L - R) / Math.max(1, n - 1);
+  const hits = pts.map((p, i) => `<rect data-act="nwPt" data-i="${i}" x="${(x(i) - col / 2).toFixed(1)}" y="0" width="${col.toFixed(1)}" height="${H - B}" fill="transparent"/>`).join('');
+  return `<div class="card"><div id="nwread" class="sm"><b>${esc(monthLabel(last.k))}</b> · ${fmt(last.net)}</div>
+    <svg class="nw" viewBox="0 0 ${W} ${H}" role="img" aria-label="Net worth by month. ${esc(monthLabel(pts[0].k))}: ${fmt(pts[0].net)}. ${esc(monthLabel(last.k))}: ${fmt(last.net)}." data-pts='${esc(JSON.stringify(pts.map((p, i) => [+x(i).toFixed(1), +y(p.net).toFixed(1), monthLabel(p.k), fmt(p.net)])))}'>
+      <line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" stroke="var(--line)" stroke-width="1"/>
+      ${n > 1 ? `<polyline class="nwl" pathLength="1" points="${line}" fill="none" stroke="var(--acc)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>` : ''}
+      <circle id="nwdot" cx="${x(n - 1).toFixed(1)}" cy="${y(last.net).toFixed(1)}" r="4" fill="var(--acc)" stroke="var(--card)" stroke-width="2"/>
+      <text x="${L}" y="${H - 6}">${esc(monthLabel(pts[0].k))}</text><text x="${W - R}" y="${H - 6}" text-anchor="end">${esc(monthLabel(last.k))}</text>
+      ${hits}</svg></div>`;
+}
+function acctRow(a, bals) {
+  const b = balAt(bals, a.id, '9999-12-31'), stale = b && daysAgo(b.date) > STALE_DAYS;
+  const tag = !b ? '<div><span class="tag warn">Needs a balance</span></div>' : stale ? '<div><span class="tag warn">Needs an update</span></div>' : '';
+  return `<div class="card rc ac"><button class="rc-main" data-act="acctBal" data-id="${esc(a.id)}"><div><div class="rc-name">${esc(a.name)}</div><div class="rc-sub">${esc(a.type)}${a.owner ? ' · ' + esc(a.owner) : ''}${b ? ' · ' + ageLabel(b.date) : ''}</div></div>
+    <div class="rc-amt">${b ? fmt(b.cents) : ''}${tag}</div></button><button class="ib" data-act="acctEdit" data-id="${esc(a.id)}" aria-label="Edit ${esc(a.name)}">${IC.edit}</button></div>`;
+}
+function viewAccounts() {
+  const accts = effAccounts(), bals = effBalances(), open = accts.filter(a => a.active), closed = accts.filter(a => !a.active);
+  if (!accts.length) return `<div class="card soon"><h3>See what you own and owe</h3><p class="mute">Add each account, then enter its balance now and then. NestLog adds it up into one net worth number and shows how it moves.</p><button class="btn pri" data-go="/accounts/account">${IC.plus} Add an account</button></div>`;
+  const now = netAt(accts, bals, ymd(new Date())), ch = netChange(), pts = netTrend();
+  const hero = now.tracked
+    ? `<div class="hero"><div class="lbl">Net worth</div><div class="big" style="color:${now.net < 0 ? 'var(--bad)' : 'var(--ink)'}">${fmt(now.net)}</div><div class="sm mute">Assets ${fmt(now.assets)} · Owing ${fmt(now.debts)}</div>${ch ? `<div class="sm mute">${signed(ch.delta)} since ${esc(ch.since)}</div>` : ''}</div>`
+    : `<div class="hero"><div class="lbl">Net worth</div><div class="big mute">Not yet</div><div class="sm mute">Tap an account to enter its balance.</div></div>`;
+  const group = (title, list) => list.length ? `<h2>${title}</h2>${list.map(a => acctRow(a, bals)).join('')}` : '';
+  return hero + (pts.length > 1 ? chartHTML(pts) : '') +
+    group('Assets', open.filter(a => !isDebt(a.type))) + group('Owing', open.filter(a => isDebt(a.type))) +
+    (closed.length ? `<button class="link" data-act="closedToggle" style="padding-left:2px">${S.ui.closedOpen ? 'Hide' : 'Show'} ${closed.length} closed ${closed.length === 1 ? 'account' : 'accounts'}</button>${S.ui.closedOpen ? closed.map(a => acctRow(a, bals)).join('') : ''}` : '') +
+    `<p class="sm mute" style="margin-top:14px">Each account counts at its latest balance. Update them whenever you like, a few times a month is plenty.</p>`;
+}
+function netWorthCard() {
+  const accts = effAccounts(), bals = effBalances(), now = netAt(accts, bals, ymd(new Date()));
+  if (!now.tracked) return '';
+  const ch = netChange();
+  return `<button class="card act" data-go="/accounts" style="display:block;width:100%;text-align:left"><div class="lbl">Net worth</div><div style="font-size:24px;font-weight:700">${fmt(now.net)}</div>${ch ? `<div class="sm mute">${signed(ch.delta)} in the last month</div>` : ''}</button>`;
+}
+function newAcct() { return { id: uid('a'), existing: false, name: '', type: 'Chequing', owner: S.prefs.paidBy || S.meta.people[0], active: true }; }
+function viewAccountForm() {
+  if (!S.acctDraft) S.acctDraft = newAcct();
+  const d = S.acctDraft, owners = [...new Set([...S.meta.people, 'Joint', d.owner].filter(Boolean))];
+  const hist = d.existing ? effBalances().filter(b => b.accountId === d.id).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 12) : [];
+  return `<form data-form="account" autocomplete="off">
+    <label for="a-name">Account name</label><input id="a-name" data-ac="name" autocapitalize="words" placeholder="For example TD Chequing" value="${esc(d.name)}">
+    <label for="a-type">Type</label><select id="a-type" data-ac="type"><optgroup label="What you own">${ACCT_TYPES.filter(t => !t[1]).map(t => `<option ${t[0] === d.type ? 'selected' : ''}>${t[0]}</option>`).join('')}</optgroup><optgroup label="What you owe">${ACCT_TYPES.filter(t => t[1]).map(t => `<option ${t[0] === d.type ? 'selected' : ''}>${t[0]}</option>`).join('')}</optgroup></select>
+    <label>Whose is it?</label><div class="seg">${owners.map(o => `<button type="button" class="${d.owner === o ? 'on' : ''}" data-act="acctOwner" data-v="${esc(o)}">${esc(o)}</button>`).join('')}</div>
+    ${d.existing ? `<label>Status</label><div class="seg"><button type="button" class="${d.active ? 'on' : ''}" data-act="acctActive" data-v="1">Open</button><button type="button" class="${d.active ? '' : 'on'}" data-act="acctActive" data-v="0">Closed</button></div><p class="sm mute">Closed accounts stay in your history. Enter a final balance of $0 first so they stop counting.</p>` : ''}
+    <div id="err" class="err" hidden></div><div class="gap"></div>
+    <button class="btn pri block">${d.existing ? 'Save account' : 'Save and add a balance'}</button>
+    ${d.existing ? `<button type="button" class="btn bad block" style="margin-top:10px" data-act="acctDel">${IC.trash} Delete account</button>` : ''}
+    ${hist.length ? `<h2>Balance history</h2><div class="card">${hist.map(b => `<div class="hist"><span>${dayLabel(b.date)}</span><span><b>${fmt(b.cents)}</b> <button type="button" class="ib" style="width:36px;height:36px" data-act="balDel" data-id="${esc(b.id)}" aria-label="Delete this balance">${IC.trash}</button></span></div>`).join('')}</div>` : ''}
+  </form>`;
+}
+function newBal(id) { return { accountId: id || '', amt: '', date: ymd(new Date()) }; }
+function viewBalanceForm() {
+  const accts = effAccounts().filter(a => a.active);
+  if (!accts.length) { setTimeout(() => go('/accounts'), 0); return ''; }
+  if (!S.balDraft) S.balDraft = newBal(accts[0].id);
+  const d = S.balDraft, a = accts.find(x => x.id === d.accountId) || accts[0];
+  d.accountId = a.id;
+  const last = balAt(effBalances(), a.id, '9999-12-31');
+  return `<form data-form="balance" autocomplete="off">
+    <label for="bal-acct">Account</label><select id="bal-acct" data-bal="accountId">${accts.map(x => `<option value="${esc(x.id)}" ${x.id === a.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+    <label for="bal-amt" id="bal-lbl">${isDebt(a.type) ? 'Amount owing today' : 'Balance today'}</label>
+    <input class="amt" id="bal-amt" data-bal="amt" inputmode="decimal" placeholder="0.00" value="${esc(d.amt)}">
+    <div id="bal-hint" class="sm mute" style="margin-top:8px">${last ? 'Last entered ' + fmt(last.cents) + ', ' + ageLabel(last.date) + '.' : 'This is the first balance for this account.'}</div>
+    <label for="bal-date">As of</label><input id="bal-date" type="date" data-bal="date" value="${esc(d.date)}">
+    <div class="chips"><button type="button" class="chip" data-act="balToday">Today</button></div>
+    <div id="err" class="err" hidden></div><div class="gap"></div>
+    <button class="btn pri block">Save balance</button>
+  </form>`;
+}
+
 /* ================= Routes ================= */
 const TABS = {
   Home: [['Overview', '/home'], ['Reports', '/home/reports']],
@@ -583,17 +732,21 @@ const ROUTES = {
   '/home/reports': soon('Home', 'Reports', 6, 'Month over month and year over year trends, with 1M, 3M, 6M, and 1Y zoom.'),
   '/income': { title: 'Income', top: 1, group: 'Income', render: viewPaycheques, after: renderIncomeList, action: '/income/pay' },
   '/income/jobs': { title: 'Income', top: 1, group: 'Income', render: viewJobs, action: '/income/job' },
-  '/income/pay': { title: 'Log paycheque', parent: '/income', crumb: 'Income', render: viewPay, after: updateDed },
+  '/income/pay': { title: 'Log paycheque', parent: '/income', crumb: 'Income', render: viewPayNew, after: updateDed },
+  '/income/edit': { title: 'Edit paycheque', parent: '/income', crumb: 'Income', render: viewPayEdit, after: updateDed },
   '/income/job': { title: () => (S.jobDraft && S.jobDraft.existing ? 'Edit job' : 'Add job'), parent: '/income/jobs', crumb: 'Income', render: viewJob },
   '/expenses': { title: 'Expenses', top: 1, group: 'Expenses', render: viewExpenses, after: afterExpenses, action: '/expenses/add' },
-  '/expenses/add': { title: 'Add expense', parent: '/expenses', crumb: 'Expenses', render: viewAdd, after: afterAdd },
+  '/expenses/add': { title: 'Add expense', parent: '/expenses', crumb: 'Expenses', render: viewAddNew, after: afterAdd },
+  '/expenses/edit': { title: 'Edit expense', parent: '/expenses', crumb: 'Expenses', render: viewEdit, after: afterAdd },
   '/expenses/scan': { title: () => (S.scan && S.scan.source && S.scan.source !== 'photo' ? 'Check receipt' : 'Scan receipt'), parent: '/expenses', crumb: 'Expenses', render: viewScan },
   '/expenses/paste': { title: 'Paste receipt text', parent: '/expenses', crumb: 'Expenses', render: viewPaste },
   '/expenses/budgets': { title: 'Expenses', top: 1, group: 'Expenses', render: viewBudgets, action: '/expenses/budget' },
   '/expenses/budget': { title: () => (S.budDraft && S.budDraft.existing ? 'Edit budget' : 'Add budget'), parent: '/expenses/budgets', crumb: 'Budgets', render: viewBudgetForm },
   '/expenses/bills': { title: 'Expenses', top: 1, group: 'Expenses', render: viewBills, action: '/expenses/bill' },
   '/expenses/bill': { title: () => (S.billDraft && S.billDraft.existing ? 'Edit bill' : 'Add bill'), parent: '/expenses/bills', crumb: 'Bills', render: viewBillForm },
-  '/accounts': soon('Accounts', 'Balances', 5, 'Chequing, savings, cards, and debts rolled into one net worth line, plus statement import.'),
+  '/accounts': { title: 'Accounts', top: 1, group: 'Accounts', render: viewAccounts, action: '/accounts/account' },
+  '/accounts/account': { title: () => (S.acctDraft && S.acctDraft.existing ? 'Edit account' : 'Add account'), parent: '/accounts', crumb: 'Accounts', render: viewAccountForm },
+  '/accounts/balance': { title: 'Update balance', parent: '/accounts', crumb: 'Accounts', render: viewBalanceForm },
   '/accounts/investments': soon('Accounts', 'Investments', 5, 'Holdings by account with contributions, room left, and growth over time.'),
   '/planning': soon('Planning', 'Goals', 6, 'Goals with a target, a date, and progress.'),
   '/planning/whatifs': soon('Planning', 'What ifs', 6, 'Start from your real numbers, change a few levers, and compare scenarios side by side.'),
@@ -604,7 +757,7 @@ const ROUTES = {
   '/taxes/documents': soon('Taxes', 'Documents', 6, 'A filing time checklist and the receipts to keep.'),
   '/settings': { title: 'Settings', parent: '/home', crumb: 'Home', render: viewSettings }
 };
-const NAV = [['Home', '/home', 1], ['Income', '/income', 1], ['Expenses', '/expenses', 1], ['Accounts', '/accounts', 0], ['Planning', '/planning', 0], ['Insurance and Mortgage', '/insurance', 0], ['Taxes', '/taxes', 0]];
+const NAV = [['Home', '/home', 1], ['Income', '/income', 1], ['Expenses', '/expenses', 1], ['Accounts', '/accounts', 1], ['Planning', '/planning', 0], ['Insurance and Mortgage', '/insurance', 0], ['Taxes', '/taxes', 0]];
 const curPath = () => (location.hash.replace(/^#/, '') || '/home');
 const curRoute = () => ROUTES[curPath()] || ROUTES['/home'];
 const go = p => { if (location.hash === '#' + p) render(); else location.hash = p; };
@@ -706,7 +859,8 @@ function rcHTML(r, expandable) {
       ${r.note ? `<div class="sm mute">Note: ${esc(r.note)}</div>` : ''}
       ${r.flag ? `<div class="sm" style="color:var(--warn);margin-top:6px">${esc(r.flag.category)} is ${r.flag.ratio.toFixed(1)}x its usual average.</div>` : ''}
       ${threadHTML(r)}
-      <div class="row" style="margin-top:12px">${hasPic(r.id) ? `<button class="btn grow" data-act="viewPic" data-id="${esc(r.id)}">${IC.camera} Receipt photo</button>` : ''}<button class="btn bad ${hasPic(r.id) ? '' : 'grow'}" data-act="del" data-id="${esc(r.id)}">${IC.trash} Delete</button></div>
+      ${hasPic(r.id) ? `<div style="margin-top:12px"><button class="btn block" data-act="viewPic" data-id="${esc(r.id)}">${IC.camera} Receipt photo</button></div>` : ''}
+      <div class="row" style="margin-top:${hasPic(r.id) ? 8 : 12}px"><button class="btn grow" data-act="edit" data-id="${esc(r.id)}">${IC.edit} Edit</button><button class="btn bad grow" data-act="del" data-id="${esc(r.id)}">${IC.trash} Delete</button></div>
     </div>` : '';
   const attrs = expandable ? `data-act="toggle" data-id="${esc(r.id)}"` : `data-act="openMonth" data-month="${esc(r.date.slice(0, 7))}"`;
   return `<div class="card rc"><button class="rc-main" ${attrs}>
@@ -729,7 +883,7 @@ function viewHome() {
     : `<div class="hero"><div class="lbl">Spent in ${monthLabel(cm)}</div><div class="big">${fmt(spent)}</div><div class="sm mute">${prev.length ? monthLabel(pm) + ': ' + fmt(pspent) + ' \u00b7 ' : ''}<button class="link" data-go="/income/pay" style="padding:0;font-size:13px">Log a paycheque</button> to see what is left</div></div>`;
   return `${banner}${failed}${dueHTML()}${hero}
   <div class="row"><button class="btn pri grow" data-go="/expenses/add">${IC.plus} Add expense</button><button class="btn" data-act="scan" aria-label="Scan a receipt">${IC.camera}</button></div>
-  ${photosHTML()}${billsDueHTML()}${budgetAlertsHTML()}
+  ${photosHTML()}${billsDueHTML()}${budgetAlertsHTML()}${netWorthCard()}
   ${cats.length ? `<h2>By category</h2><div class="card">${shown.map(([c, v]) => `<div class="cat"><div class="row"><span>${esc(c)}</span><b>${fmt(v)}</b></div><div class="bar"><b style="width:${Math.max(3, Math.round(v / cats[0][1] * 100))}%"></b></div></div>`).join('')}
       ${cats.length > 5 ? `<button class="link" data-act="catsToggle">${S.ui.catsOpen ? 'Show fewer' : 'Show all ' + cats.length}</button>` : ''}</div>` : ''}
   ${flagged.length ? `<h2>Worth a look</h2><button class="link" data-act="flagsToggle" style="padding-left:2px">${flagged.length} above the usual ${S.ui.flagsOpen ? '(hide)' : '(show)'}</button>${S.ui.flagsOpen ? flagged.slice(0, 8).map(r => rcHTML(r, false)).join('') : ''}` : ''}
@@ -773,7 +927,7 @@ function newDraft() {
   const cats = S.meta.categories;
   return { merchant: '', date: ymd(new Date()), paidBy: S.prefs.paidBy || S.meta.people[0], account: S.prefs.account || '', note: '', total: '', cat: '', catTouched: false, split: false, lines: [{ category: cats[0] || '', amt: '' }, { category: cats[1] || cats[0] || '', amt: '' }] };
 }
-function catOpts(sel) { return `<option value="">Choose a category</option>` + S.meta.categories.map(c => `<option ${c === sel ? 'selected' : ''}>${esc(c)}</option>`).join(''); }
+function catOpts(sel) { const list = sel && !S.meta.categories.includes(sel) ? [sel, ...S.meta.categories] : S.meta.categories; return `<option value="">Choose a category</option>` + list.map(c => `<option ${c === sel ? 'selected' : ''}>${esc(c)}</option>`).join(''); }
 function linesHTML() {
   const d = S.draft;
   return d.lines.map((l, i) => i === 0
@@ -782,14 +936,16 @@ function linesHTML() {
 }
 function viewAdd() {
   if (!S.draft) S.draft = newDraft();
-  const d = S.draft, ppl = S.meta.people, accts = S.meta.accounts;
+  const d = S.draft, editing = !!d.editId;
+  const ppl = [...new Set([...S.meta.people, d.paidBy].filter(Boolean))], accts = [...new Set([...S.meta.accounts, d.account].filter(Boolean))];
   const merchants = [...new Set(allReceipts().map(r => r.merchant))].slice(0, 60);
   const photoCard = d.photo ? `<div class="card"><div class="row" style="align-items:flex-start"><img class="thumb" style="margin:0;max-width:72px;max-height:96px" src="${esc(d.photo)}" alt="Your receipt photo"><div class="grow"><b>Receipt photo kept on this phone</b><div class="sm mute">Type the details in from the photo, or paste its text. With a Sheet connected it can also be read for you.</div></div></div>
       <div class="row" style="margin-top:10px"><button type="button" class="btn grow" data-act="pasteWithPhoto">Paste text</button><button type="button" class="btn grow" data-act="readPhoto">Read photo</button></div></div>` : '';
-  return `<form data-form="add" autocomplete="off">
-    ${photoCard}
+  const capture = editing ? '' : `${photoCard}
     <div class="row" style="margin-top:4px"><button type="button" class="btn grow" data-act="scan">${IC.camera} Scan receipt</button><button type="button" class="btn grow" data-act="pick">Choose photo</button></div>
-    <button type="button" class="btn block" style="margin-top:8px" data-go="/expenses/paste">Paste receipt text</button>
+    <button type="button" class="btn block" style="margin-top:8px" data-go="/expenses/paste">Paste receipt text</button>`;
+  return `<form data-form="add" autocomplete="off">
+    ${capture}
     <label for="f-total">Amount</label>
     <input class="amt" id="f-total" data-f="total" inputmode="decimal" placeholder="0.00" value="${esc(d.total)}">
     <label for="f-merchant">Merchant</label>
@@ -815,8 +971,21 @@ function viewAdd() {
     <textarea id="f-note" data-f="note" rows="2" placeholder="Optional">${esc(d.note)}</textarea>
     <div id="err" class="err" hidden></div>
     <div class="gap"></div>
-    <button class="btn pri block">Save expense</button>
+    <button class="btn pri block">${editing ? 'Save changes' : 'Save expense'}</button>
   </form>`;
+}
+// Opens an existing entry in the same form used to add one. The first line takes whatever the others leave.
+function draftFromReceipt(r) {
+  const cats = S.meta.categories, multi = r.lines.length > 1;
+  const lines = [{ category: r.lines[0].category, amt: '' }, ...r.lines.slice(1).map(l => ({ category: l.category, amt: (l.cents / 100).toFixed(2) }))];
+  if (!multi) lines.push({ category: cats[1] || cats[0] || '', amt: '' });
+  return { editId: r.id, merchant: r.merchant, date: r.date, paidBy: r.paidBy || S.prefs.paidBy || S.meta.people[0], account: r.account || '', note: r.note || '', total: (r.total / 100).toFixed(2), cat: r.lines[0].category, catTouched: true, split: multi, lines };
+}
+// The add screen never shows a half edited entry, however quickly someone moves between screens.
+function viewAddNew() { if (S.draft && S.draft.editId) S.draft = null; return viewAdd(); }
+function viewEdit() {
+  if (!S.draft || !S.draft.editId) { setTimeout(() => go('/expenses'), 0); return ''; }
+  return viewAdd();
 }
 function afterAdd() { updateRest(); }
 function updateRest() {
@@ -847,7 +1016,7 @@ function buildReceipt() {
     if (rest <= 0) return { error: 'The splits add up to the full total or more. Lower one so something is left for the first category.' };
     lines = [{ category: d.lines[0].category, cents: rest }, ...extra];
   }
-  return { receipt: { id: uid(), date: d.date, merchant: d.merchant.trim(), paidBy: d.paidBy, account: d.account, note: d.note.trim(), lines } };
+  return { receipt: { id: d.editId || uid(), date: d.date, merchant: d.merchant.trim(), paidBy: d.paidBy, account: d.account, note: d.note.trim(), lines } };
 }
 
 /* ---- Settings ---- */
@@ -866,7 +1035,7 @@ function viewSettings() {
       <p class="sm mute">Categories, people, and accounts are edited in the Sheet on the Categories and Settings tabs, and appear here on the next sync.</p></div>
     <h2>PIN</h2><div class="card"><p class="sm mute" style="margin-top:0">To change the PIN, edit the PIN value in the Apps Script project settings, then enter the new one here on each phone.</p>
       <form data-form="pin"><input name="pin" type="password" inputmode="numeric" autocomplete="off" placeholder="New PIN for this phone" aria-label="New PIN for this phone"><div class="gap"></div><button class="btn block">Update on this phone</button></form></div>
-    <h2>About</h2><div class="card"><div class="sm mute">NestLog. Add and delete expenses, split across categories, sync to your Sheet. Editing an entry is delete and re-add for now.</div>
+    <h2>About</h2><div class="card"><div class="sm mute">NestLog. Add, edit and delete expenses and paycheques, split across categories, sync to your Sheet.</div>
       <div class="gap"></div><button class="btn bad block" data-act="forget">Forget this phone</button></div>`;
 }
 
@@ -1148,8 +1317,10 @@ const dayLabel = s => parseYMD(s).toLocaleDateString('en-CA', { weekday: 'short'
 
 function effIncome() {
   const removed = new Set(S.queue.filter(q => q.type === 'removeIncome').map(q => q.id));
-  const out = S.income.filter(r => !removed.has(r.id)).map(r => ({ ...r, pending: false }));
-  S.queue.forEach(q => { if (q.type === 'addIncome' && !out.some(r => r.id === q.entry.id)) out.push({ id: q.entry.id, date: q.entry.date, person: q.entry.person, job: q.entry.job, gross: q.entry.gross, net: q.entry.net, account: q.entry.account, note: q.entry.note, pending: true }); });
+  const edits = new Map(S.queue.filter(q => q.type === 'editIncome').map(q => [q.entry.id, q.entry]));
+  const shape = (e, pending) => ({ id: e.id, date: e.date, person: e.person, job: e.job, gross: e.gross, net: e.net, account: e.account, note: e.note, pending });
+  const out = S.income.filter(r => !removed.has(r.id)).map(r => edits.has(r.id) ? shape(edits.get(r.id), true) : { ...r, pending: false });
+  S.queue.forEach(q => { if (q.type === 'addIncome' && !out.some(r => r.id === q.entry.id)) out.push(shape(edits.get(q.entry.id) || q.entry, true)); });
   return out.sort((a, b) => b.date.localeCompare(a.date));
 }
 function effJobs() {
@@ -1183,7 +1354,7 @@ function incHTML(r) {
       ${r.gross !== null ? `<div class="ln"><span>Gross pay</span><span>${fmt(r.gross)}</span></div><div class="ln"><span>Deductions</span><span>${fmt(r.gross - r.net)}</span></div>` : ''}
       <div class="ln"><b>Take-home</b><b>${fmt(r.net)}</b></div>
       ${r.account ? `<div class="sm mute" style="margin-top:6px">Deposited to: ${esc(r.account)}</div>` : ''}${r.note ? `<div class="sm mute">Note: ${esc(r.note)}</div>` : ''}
-      <div style="margin-top:10px"><button class="btn bad" data-act="idel" data-id="${esc(r.id)}">${IC.trash} Delete</button></div></div>` : '';
+      <div class="row" style="margin-top:10px"><button class="btn grow" data-act="iedit" data-id="${esc(r.id)}">${IC.edit} Edit</button><button class="btn bad grow" data-act="idel" data-id="${esc(r.id)}">${IC.trash} Delete</button></div></div>` : '';
   return `<div class="card rc"><button class="rc-main" data-act="itoggle" data-id="${esc(r.id)}"><div><div class="rc-name">${esc(r.job)}</div><div class="rc-sub">${esc(r.person)}${r.account ? ' · ' + esc(r.account) : ''}</div></div>
     <div class="rc-amt" style="color:var(--acc)">${fmt(r.net)}${r.pending ? '<div><span class="tag mute">Waiting to sync</span></div>' : ''}</div></button>${detail}</div>`;
 }
@@ -1206,15 +1377,24 @@ function applyJobToPay(d, jobId) {
   d.jobId = jobId;
   if (job) { d.person = job.person; d.net = job.net ? (job.net / 100).toFixed(2) : ''; d.date = job.nextPay && job.nextPay <= t ? job.nextPay : t; }
 }
+function payDraftFrom(r) {
+  return { editId: r.id, jobId: '', person: r.person, jobName: r.job, date: r.date, net: (r.net / 100).toFixed(2), gross: r.gross === null ? '' : (r.gross / 100).toFixed(2), account: r.account || '', note: r.note || '' };
+}
+function viewPayNew() { if (S.payDraft && S.payDraft.editId) S.payDraft = null; return viewPay(); }
+function viewPayEdit() {
+  if (!S.payDraft || !S.payDraft.editId) { setTimeout(() => go('/income'), 0); return ''; }
+  return viewPay();
+}
 function viewPay() {
   if (!S.payDraft) S.payDraft = newPay();
-  const d = S.payDraft, jobs = effJobs().filter(j => j.active), accts = S.meta.accounts;
+  const d = S.payDraft, editing = !!d.editId, jobs = effJobs().filter(j => j.active), accts = [...new Set([...S.meta.accounts, d.account].filter(Boolean))];
+  const people = [...new Set([...S.meta.people, d.person].filter(Boolean))];
   return `<form data-form="pay" autocomplete="off">
-    <label for="p-job">Paycheque from</label>
-    <select id="p-job" data-p="jobId">${jobs.map(j => `<option value="${esc(j.id)}" ${d.jobId === j.id ? 'selected' : ''}>${esc(j.person)} · ${esc(j.name)}</option>`).join('')}<option value="" ${d.jobId === '' ? 'selected' : ''}>Something else</option></select>
+    ${editing ? '' : `<label for="p-job">Paycheque from</label>
+    <select id="p-job" data-p="jobId">${jobs.map(j => `<option value="${esc(j.id)}" ${d.jobId === j.id ? 'selected' : ''}>${esc(j.person)} · ${esc(j.name)}</option>`).join('')}<option value="" ${d.jobId === '' ? 'selected' : ''}>Something else</option></select>`}
     <div id="p-other" ${d.jobId ? 'hidden' : ''}>
       <label for="p-name">What is it?</label><input id="p-name" data-p="jobName" placeholder="Tax refund, bonus, gift" value="${esc(d.jobName)}">
-      <label>Whose is it?</label><div class="seg">${S.meta.people.map(p => `<button type="button" class="${d.person === p ? 'on' : ''}" data-act="payPerson" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>
+      <label>Whose is it?</label><div class="seg">${people.map(p => `<button type="button" class="${d.person === p ? 'on' : ''}" data-act="payPerson" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>
     </div>
     <label for="p-net">Take-home amount</label>
     <input class="amt" id="p-net" data-p="net" inputmode="decimal" placeholder="0.00" value="${esc(d.net)}">
@@ -1228,7 +1408,7 @@ function viewPay() {
     <label for="p-note">Note</label>
     <textarea id="p-note" data-p="note" rows="2" placeholder="Optional">${esc(d.note)}</textarea>
     <div id="err" class="err" hidden></div><div class="gap"></div>
-    <button class="btn pri block">Save paycheque</button>
+    <button class="btn pri block">${editing ? 'Save changes' : 'Save paycheque'}</button>
   </form>`;
 }
 function updateDed() {
@@ -1290,6 +1470,29 @@ async function shareCSV(text, name) {
 }
 
 /* ================= Actions ================= */
+// Saves a changed entry. An entry still waiting to reach the Sheet is changed in place, so it goes up once, already right.
+function queueEdit(rc) {
+  const clean = { id: rc.id, date: rc.date, merchant: rc.merchant, paidBy: rc.paidBy, account: rc.account, note: rc.note, lines: rc.lines.map(l => ({ category: l.category, cents: l.cents })) };
+  const a = S.queue.findIndex(q => q.type === 'add' && q.receipt.id === rc.id && !q.sending);
+  if (a >= 0) S.queue[a].receipt = { ...S.queue[a].receipt, ...clean };
+  else {
+    const e = S.queue.findIndex(q => q.type === 'edit' && q.receipt.id === rc.id && !q.sending);
+    if (e >= 0) S.queue[e].receipt = clean; else S.queue.push({ type: 'edit', receipt: clean });
+  }
+  saveQ();
+}
+function queueIncomeEdit(en) {
+  const clean = { id: en.id, date: en.date, person: en.person, job: en.job, gross: en.gross, net: en.net, account: en.account, note: en.note };
+  const a = S.queue.findIndex(q => q.type === 'addIncome' && q.entry.id === en.id && !q.sending);
+  if (a >= 0) S.queue[a].entry = { ...S.queue[a].entry, ...clean };
+  else {
+    const e = S.queue.findIndex(q => q.type === 'editIncome' && q.entry.id === en.id && !q.sending);
+    if (e >= 0) S.queue[e].entry = clean; else S.queue.push({ type: 'editIncome', entry: clean });
+  }
+  saveQ();
+}
+const undoEdit = old => { queueEdit(old); renderKeep(); flush(); };
+const undoIncomeEdit = old => { queueIncomeEdit(old); renderKeep(); flush(); };
 function undoAdd(id) {
   const i = S.queue.findIndex(q => q.type === 'add' && q.receipt.id === id && !q.sending);
   if (i >= 0) S.queue.splice(i, 1); else S.queue.push({ type: 'remove', id });
@@ -1344,6 +1547,27 @@ const ACTS = {
   phOpen: async t => { const id = t.dataset.id, d = await PH.get(id); if (!d) { S.photos = S.photos.filter(p => p.id !== id); store.set('photos', S.photos); renderKeep(); toast('That photo is no longer on this phone.'); return; } openPhoto(id, d); },
   phDel: async t => { if (!(await confirmDialog('Discard this photo?', 'It will be removed from this phone.', 'Discard'))) return; const id = t.dataset.id; S.photos = S.photos.filter(p => p.id !== id); store.set('photos', S.photos); PH.del(id); renderKeep(); },
   viewPic: async t => { const d = await PH.get('r_' + t.dataset.id); if (d) showPic(d); else toast('That photo is no longer on this phone.'); },
+  closedToggle: () => { S.ui.closedOpen = !S.ui.closedOpen; render(); },
+  nwPt: t => { const svg = t.closest('svg'), pts = JSON.parse(svg.dataset.pts), p = pts[+t.dataset.i]; if (!p) return; $('#nwread').innerHTML = `<b>${esc(p[2])}</b> · ${esc(p[3])}`; const dot = $('#nwdot'); dot.setAttribute('cx', p[0]); dot.setAttribute('cy', p[1]); },
+  acctEdit: t => { const a = effAccounts().find(x => x.id === t.dataset.id); if (!a) return; S.acctDraft = { ...a, existing: true }; go('/accounts/account'); },
+  acctOwner: t => { S.acctDraft.owner = t.dataset.v; t.parentElement.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === t)); },
+  acctActive: t => { S.acctDraft.active = t.dataset.v === '1'; t.parentElement.querySelectorAll('button').forEach(b => b.classList.toggle('on', b === t)); },
+  acctBal: t => { S.balDraft = newBal(t.dataset.id); go('/accounts/balance'); },
+  balToday: () => { S.balDraft.date = ymd(new Date()); $('#bal-date').value = S.balDraft.date; },
+  balDel: t => {
+    const b = effBalances().find(x => x.id === t.dataset.id); if (!b) return;
+    const i = S.queue.findIndex(q => q.type === 'addBalance' && q.balance.id === b.id && !q.sending);
+    if (i >= 0) S.queue.splice(i, 1); else S.queue.push({ type: 'removeBalance', id: b.id });
+    saveQ(); renderKeep(); toast('Deleted the ' + dayLabel(b.date) + ' balance', 'Undo', () => { const j = S.queue.findIndex(q => q.type === 'removeBalance' && q.id === b.id && !q.sending); if (j >= 0) S.queue.splice(j, 1); else S.queue.push({ type: 'addBalance', balance: { id: b.id, accountId: b.accountId, date: b.date, cents: b.cents } }); saveQ(); renderKeep(); flush(); }); flush();
+  },
+  acctDel: async () => {
+    const d = S.acctDraft; if (!d) return;
+    const hist = effBalances().filter(b => b.accountId === d.id), snap = { id: d.id, name: d.name, type: d.type, owner: d.owner, active: d.active };
+    if (!(await confirmDialog('Delete this account?', d.name + ' and its ' + hist.length + ' saved ' + (hist.length === 1 ? 'balance' : 'balances') + ' will be removed from the Sheet too.', 'Delete'))) return;
+    S.queue.push({ type: 'removeAccount', id: d.id }); saveQ(); S.acctDraft = null;
+    if (S.stack.length > 1 && S.stack[S.stack.length - 2] === '/accounts') history.back(); else go('/accounts');
+    toast('Deleted ' + d.name, 'Undo', () => { S.queue.push({ type: 'saveAccount', account: snap }); hist.forEach(b => S.queue.push({ type: 'addBalance', balance: { id: b.id, accountId: b.accountId, date: b.date, cents: b.cents } })); saveQ(); renderKeep(); flush(); }); flush();
+  },
   budNew: t => { S.budDraft = { category: t.dataset.c || '', amt: '', existing: false }; go('/expenses/budget'); },
   budEdit: t => { const b = effBudgets().find(x => x.category === t.dataset.c); if (!b) return; S.budDraft = { category: b.category, amt: (b.cents / 100).toFixed(2), existing: true, prev: b.cents }; go('/expenses/budget'); },
   budDel: () => {
@@ -1408,6 +1632,8 @@ const ACTS = {
     if (i >= 0) S.queue.splice(i, 1); else S.queue.push({ type: 'remove', id: r.id });
     saveQ(); renderKeep(); toast('Deleted ' + r.merchant, 'Undo', () => undoDelete(r)); flush();
   },
+  edit: t => { const r = allReceipts().find(x => x.id === t.dataset.id); if (!r) return; S.draft = draftFromReceipt(r); go('/expenses/edit'); },
+  iedit: t => { const r = effIncome().find(x => x.id === t.dataset.id); if (!r) return; S.payDraft = payDraftFrom(r); go('/income/edit'); },
   imonthPrev: () => { S.ui.imonth = shiftMonth(S.ui.imonth, -1); render(); },
   imonthNext: () => { S.ui.imonth = shiftMonth(S.ui.imonth, 1); render(); },
   iperson: t => { S.ui.ip = t.dataset.v; render(); },
@@ -1459,6 +1685,12 @@ document.addEventListener('click', e => {
 document.addEventListener('input', e => {
   const el = e.target;
   if (el.dataset.bd !== undefined && S.budDraft) { S.budDraft[el.dataset.bd] = el.value; return; }
+  if (el.dataset.ac !== undefined && S.acctDraft) { S.acctDraft[el.dataset.ac] = el.value; return; }
+  if (el.dataset.bal !== undefined && S.balDraft) {
+    S.balDraft[el.dataset.bal] = el.value;
+    if (el.dataset.bal === 'accountId') { const a = effAccounts().find(x => x.id === el.value), last = balAt(effBalances(), el.value, '9999-12-31'); $('#bal-lbl').textContent = a && isDebt(a.type) ? 'Amount owing today' : 'Balance today'; $('#bal-hint').textContent = last ? 'Last entered ' + fmt(last.cents) + ', ' + ageLabel(last.date) + '.' : 'This is the first balance for this account.'; }
+    return;
+  }
   if (el.dataset.bl !== undefined && S.billDraft) { S.billDraft[el.dataset.bl] = el.value; return; }
   if (el.dataset.pt !== undefined && S.paste) { S.paste.text = el.value; return; }
   if (el.dataset.item !== undefined && S.scan) {
@@ -1542,6 +1774,14 @@ document.addEventListener('submit', async e => {
     const name = job ? job.name : cap(d.jobName);
     if (!name) { showErr('Say what the income is.'); return; }
     if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date)) { showErr('Choose a date.'); return; }
+    if (d.editId) {
+      const old = effIncome().find(x => x.id === d.editId);
+      queueIncomeEdit({ id: d.editId, date: d.date, person: d.person, job: name, gross, net, account: d.account, note: d.note.trim() });
+      S.ui.imonth = d.date.slice(0, 7); S.payDraft = null;
+      if (S.stack.length > 1 && S.stack[S.stack.length - 2] === '/income') history.back(); else go('/income');
+      toast('Saved changes to ' + name, old ? 'Undo' : undefined, old ? () => undoIncomeEdit(old) : undefined);
+      flush(); return;
+    }
     const entry = { id: uid('i'), date: d.date, person: job ? job.person : d.person, job: name, jobId: job ? job.id : '', gross, net, account: d.account, note: d.note.trim(), nextPay: job ? nextPayFor(job, d.date) : '' };
     S.queue.push({ type: 'addIncome', entry }); saveQ();
     S.prefs.account = entry.account; store.set('prefs', S.prefs);
@@ -1561,6 +1801,31 @@ document.addEventListener('submit', async e => {
     S.jobDraft = null;
     if (S.stack.length > 1 && S.stack[S.stack.length - 2] === '/income/jobs') history.back(); else go('/income/jobs');
     toast('Saved ' + name); flush();
+  }
+  if (kind === 'account') {
+    const d = S.acctDraft; if (!d) return;
+    const name = cap(d.name);
+    if (!name) { showErr('Enter a name for the account.'); return; }
+    if (effAccounts().some(a => a.id !== d.id && a.name.toLowerCase() === name.toLowerCase())) { showErr('You already have an account with that name.'); return; }
+    const acct = { id: d.id, name, type: d.type, owner: d.owner, active: d.active !== false };
+    S.queue.push({ type: 'saveAccount', account: acct }); saveQ();
+    S.acctDraft = null;
+    if (d.existing) { if (S.stack.length > 1 && S.stack[S.stack.length - 2] === '/accounts') history.back(); else go('/accounts'); toast('Saved ' + name); }
+    else { S.balDraft = newBal(acct.id); replaceRoute('/accounts/balance'); toast('Saved ' + name + '. Add its balance.'); }
+    flush();
+  }
+  if (kind === 'balance') {
+    const d = S.balDraft; if (!d) return;
+    const a = effAccounts().find(x => x.id === d.accountId); if (!a) { showErr('Choose an account.'); return; }
+    const cents = toCentsS(d.amt);
+    if (cents === null || String(d.amt).trim() === '') { showErr('Enter the balance. Use 0 if it is empty.'); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date)) { showErr('Choose a date.'); return; }
+    if (d.date > ymd(new Date())) { showErr('That date is in the future.'); return; }
+    const bal = { id: uid('b'), accountId: a.id, date: d.date, cents };
+    S.queue.push({ type: 'addBalance', balance: bal }); saveQ(); S.balDraft = null;
+    if (S.stack.length > 1 && S.stack[S.stack.length - 2] === '/accounts') history.back(); else go('/accounts');
+    toast('Saved ' + a.name + ' at ' + fmt(cents), 'Undo', () => { const j = S.queue.findIndex(q => q.type === 'addBalance' && q.balance.id === bal.id && !q.sending); if (j >= 0) S.queue.splice(j, 1); else S.queue.push({ type: 'removeBalance', id: bal.id }); saveQ(); renderKeep(); flush(); });
+    flush();
   }
   if (kind === 'budget') {
     const d = S.budDraft; if (!d) return;
@@ -1621,6 +1886,14 @@ document.addEventListener('submit', async e => {
     const r = buildReceipt();
     if (r.error) { showErr(r.error); return; }
     const rc = r.receipt, pid = S.draft && S.draft.photoId;
+    if (S.draft && S.draft.editId) {
+      const old = allReceipts().find(x => x.id === rc.id);
+      queueEdit(rc);
+      S.ui.month = rc.date.slice(0, 7); S.draft = null;
+      if (S.stack.length > 1 && S.stack[S.stack.length - 2] === '/expenses') history.back(); else go('/expenses');
+      toast('Saved changes to ' + rc.merchant, old ? 'Undo' : undefined, old ? () => undoEdit(old) : undefined);
+      flush(); return;
+    }
     S.queue.push({ type: 'add', receipt: rc }); saveQ();
     if (pid) attachPhoto(pid, rc.id);
     S.prefs.paidBy = rc.paidBy; S.prefs.account = rc.account; store.set('prefs', S.prefs);
@@ -1653,7 +1926,7 @@ window.addEventListener('online', () => flush());
 // Pull down at the top of a screen to sync now. Not on entry forms, so a half finished entry is never disturbed.
 (function () {
   const view = $('#view'), box = $('#ptr');
-  const FORMS = ['/expenses/add', '/expenses/scan', '/expenses/paste', '/expenses/budget', '/expenses/bill', '/income/pay', '/income/job'];
+  const FORMS = ['/accounts/account', '/accounts/balance', '/expenses/add', '/expenses/edit', '/income/edit', '/expenses/scan', '/expenses/paste', '/expenses/budget', '/expenses/bill', '/income/pay', '/income/job'];
   const SHOW = 44, DRAG = 0.45, READY = SHOW / DRAG; // finger travel needed before release counts
   let y0 = null, dy = 0, busy = false;
   const set = (h, txt) => { box.style.height = h + 'px'; if (txt !== undefined) box.textContent = txt; };
@@ -1687,12 +1960,16 @@ window.addEventListener('hashchange', () => {
   if (S.stack.length > 1 && S.stack[S.stack.length - 2] === p) S.stack.pop(); else if (S.stack[S.stack.length - 1] !== p) S.stack.push(p);
   // A half finished entry is cleared once you leave the Add screen.
   if (S.lastRoute === '/expenses/add' && p !== '/expenses/add') S.draft = null;
+  if (S.lastRoute === '/expenses/edit' && p !== '/expenses/edit') S.draft = null;
+  if (S.lastRoute === '/income/edit' && p !== '/income/edit') S.payDraft = null;
   if (S.lastRoute === '/expenses/paste' && p !== '/expenses/paste' && p !== '/expenses/scan') { S.paste = null; S.pastePhoto = null; }
   if (S.lastRoute === '/expenses/scan' && p !== '/expenses/scan') {
     const pid = S.scan && S.scan.photoId; S.scan = null; S.scanToken++;
     if (p !== '/expenses/paste') { S.paste = null; S.pastePhoto = null; }
     if (pid && !S.photos.some(x => x.id === pid)) PH.del(pid); // a photo that was never kept or saved is dropped
   }
+  if (S.lastRoute === '/accounts/account' && p !== '/accounts/account') S.acctDraft = null;
+  if (S.lastRoute === '/accounts/balance' && p !== '/accounts/balance') S.balDraft = null;
   if (S.lastRoute === '/expenses/budget' && p !== '/expenses/budget') S.budDraft = null;
   if (S.lastRoute === '/expenses/bill' && p !== '/expenses/bill') S.billDraft = null;
   if (S.lastRoute === '/income/pay' && p !== '/income/pay') S.payDraft = null;

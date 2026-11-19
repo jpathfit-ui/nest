@@ -1,6 +1,6 @@
-# NestLog, phase 4 (budgets, bills, notes, and a camera that works offline)
+# NestLog, phase 5 (edit entries, accounts and net worth)
 
-A household income and expense tracker for two phones, writing to a Google Sheet. It covers the menu and navigation, Add expense with single or split categories, receipt scanning, income and jobs for you and Sue, a Home view of what is left over each month, the PIN, sync, undo, delete, and CSV export. Phase 4 adds budgets, recurring bills, notes on entries, a Home activity feed, and a camera that works with no Sheet connected. The other menu items are in place and say which phase fills them.
+A household income and expense tracker for two phones, writing to a Google Sheet. It covers the menu and navigation, Add expense with single or split categories, receipt scanning, income and jobs for you and Sue, a Home view of what is left over each month, the PIN, sync, undo, delete, and CSV export. Phase 4 added budgets, recurring bills, notes on entries, a Home activity feed, and a camera that works with no Sheet connected. Phase 5 adds editing of expenses and paycheques, and Accounts with balances, net worth and a trend line. The other menu items are in place and say which phase fills them.
 
 ## Set up the Sheet (about 10 minutes, on a computer)
 
@@ -43,9 +43,19 @@ A household income and expense tracker for two phones, writing to a Google Sheet
 - Deleting a paycheque does not move the job's pay date back. Edit the job if you need to correct it.
 - Take-home pay is what counts toward Left over. Gross and deductions are stored for the Sheet.
 
-## Phase 4: update the Sheet script first
+## Phase 5: update the Sheet script first
 
-Budgets, bills and notes need the newest `apps-script/Code.gs`. Paste it over the old one, then Deploy > Manage deployments > edit (pencil) > Version: New version > Deploy. The link stays the same, and the Budgets, Bills and Notes tabs appear in the Sheet the first time you save one. Until you do this, the app keeps working but those saves show a "Could not save" card on Home with a Try again button.
+Editing and Accounts need the newest `apps-script/Code.gs`. Paste it over the old one, then Deploy > Manage deployments > edit (pencil) > Version: New version > Deploy. The link stays the same, and the Accounts and Balances tabs appear the first time you save one. Until you do this, the app keeps working but those saves show a "Could not save" card on Home with a Try again button.
+
+## Editing entries
+
+Open an expense or a paycheque and tap Edit. The same form opens with everything filled in, including split lines. Change anything and tap Save changes. Undo puts it back. The entry keeps its id, so its notes and receipt photo stay attached, and the Sheet row is changed in place rather than deleted and re-added. An entry that has not synced yet is simply changed before it goes up. Scanned line items keep their detail but follow a new merchant or date. A paycheque edit does not move the job's next pay date.
+
+## Accounts, balances and net worth
+
+Accounts > Balances. Add each account with a type (chequing, savings, TFSA, RRSP, FHSA, investment, cash, property, credit card, line of credit, loan, mortgage and so on) and whose it is (John, Sue or Joint). Then enter its balance whenever you like. Tap an account to enter a new balance, or the pencil to edit it and see its balance history. Net worth adds what you own and subtracts what you owe, using each account's latest balance. The line shows the last 12 months, and tapping it reads out any month. Accounts not updated for 35 days say so. Home shows net worth and the change over the last month.
+
+Things to know: an account counts from its first balance, so net worth steps up when you add one. To close an account, enter a final balance of $0, then set it to Closed; its history stays. Deleting an account deletes its balances. The Settings tab list of accounts used on expenses is separate from these. Syncs to Accounts and Balances tabs. Statement import and the Investments tab (contribution room, holdings) come later.
 
 ## Camera with no Sheet connected
 
@@ -99,10 +109,10 @@ On the Add expense screen, Paste receipt text opens a box. Tap in it and choose 
 
 Tested: the app in a phone-sized browser against a simulated Sheet script (88 checks, plus 15 for pull to refresh, 28 for paste text and 33 for the text reader, including pay date rules across month ends, year ends, and clock changes), the script's real code against a simulated Google Sheet and a simulated Gemini reply (56 checks), and the tax split over 4,000 random receipts.
 
-Phase 4 adds `tests/test.js` (64 checks on the app: the offline camera, budgets, bills, notes, the activity feed, capital letters, reduce motion) and `tests/script-test.js` (21 checks running the real `Code.gs` against a fake Sheet).
+Phase 5 brings `tests/test.js` to 110 checks on the app (offline camera, budgets, bills, notes, the activity feed, editing, accounts and net worth, capital letters, reduce motion) and `tests/script-test.js` to 54 checks running the real `Code.gs` against a fake Sheet.
 
 Not tested: the iPhone Scan Text button (the app only provides the box), the script inside real Google services, and the reader on real receipts with a real Gemini key, because neither is reachable from where this was built. Start with a few receipts you can check by eye, and expect to correct some lines at first. Photos in good light, flat, and filling the frame read best.
 
 ## Not built yet
 
-Accounts and statement import (phase 5), planning, what-ifs, mortgage, taxes, reports (phase 6). Editing an existing entry is delete and re-add for now. Receipt photos are kept on the phone that took them only, so Sue will not see your photos on her phone.
+Statement import and Investments (rest of phase 5), planning, what-ifs, mortgage, taxes, reports (phase 6). Receipt photos are kept on the phone that took them only, so Sue will not see your photos on her phone.

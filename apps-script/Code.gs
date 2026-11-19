@@ -26,6 +26,9 @@ var BUDGET_HEADERS = ['Category', 'Monthly limit'];
 var BILL_HEADERS = ['Bill ID', 'Bill', 'Amount', 'Category', 'Frequency', 'Next due', 'Day of month', 'Active'];
 var BILL_FREQS = ['Monthly', 'Weekly', 'Every 2 weeks', 'Yearly'];
 var NOTE_HEADERS = ['Note ID', 'Entry ID', 'Author', 'Note', 'Created at'];
+var ACCOUNT_HEADERS = ['Account ID', 'Account', 'Type', 'Owner', 'Active'];
+var BALANCE_HEADERS = ['Balance ID', 'Account ID', 'Date', 'Balance', 'Entered at'];
+var ACCOUNT_TYPES = ['Chequing', 'Savings', 'TFSA', 'RRSP', 'FHSA', 'Investment', 'Cash', 'Property', 'Other asset', 'Credit card', 'Line of credit', 'Loan', 'Mortgage', 'Other debt'];
 var ITEM_HEADERS = ['Receipt ID', 'Date', 'Merchant', 'Item', 'Section', 'Category', 'Amount before tax', 'Tax share'];
 
 var EXPENSE_HEADERS = ['Receipt ID', 'Date', 'Merchant', 'Category', 'Note', 'Amount', 'Paid by', 'Account'];
@@ -172,8 +175,10 @@ function doPost(e) {
     switch (req.action) {
       case 'list': return out_(list_(req));
       case 'add': return out_(add_(req.receipt));
+      case 'edit': return out_(edit_(req.receipt));
       case 'remove': return out_(remove_(req.id));
       case 'addIncome': return out_(addIncome_(req.entry));
+      case 'editIncome': return out_(editIncome_(req.entry));
       case 'removeIncome': return out_(removeIncome_(req.id));
       case 'saveJob': return out_(saveJob_(req.job));
       case 'removeJob': return out_(removeJob_(req.id));
@@ -181,6 +186,10 @@ function doPost(e) {
       case 'removeBudget': return out_(removeBudget_(req.category));
       case 'saveBill': return out_(saveBill_(req.bill));
       case 'removeBill': return out_(removeBill_(req.id));
+      case 'saveAccount': return out_(saveAccount_(req.account));
+      case 'removeAccount': return out_(removeAccount_(req.id));
+      case 'addBalance': return out_(addBalance_(req.balance));
+      case 'removeBalance': return out_(removeBalance_(req.id));
       case 'addNote': return out_(addNote_(req.note));
       case 'removeNote': return out_(removeNote_(req.id));
       default: return out_({ ok: false, error: 'Unknown action' });
@@ -259,10 +268,11 @@ function list_(req) {
       });
     }
   }
-  return { ok: true, rows: rows, income: incomeList_(ss, since), jobs: jobList_(ss), budgets: budgetList_(ss), bills: billList_(ss), notes: noteList_(ss), meta: meta_(ss, ex) };
+  return { ok: true, rows: rows, income: incomeList_(ss, since), jobs: jobList_(ss), budgets: budgetList_(ss), bills: billList_(ss), notes: noteList_(ss), accounts: accountList_(ss), balances: balanceList_(ss), meta: meta_(ss, ex) };
 }
 
-function add_(r) {
+// Checks one expense entry from the phone and returns the rows to write. Shared by add and edit.
+function parseReceipt_(r) {
   if (!r || typeof r !== 'object') throw new Error('Missing entry');
   var id = String(r.id || '');
   if (!/^[A-Za-z0-9_-]{8,64}$/.test(id)) throw new Error('Bad entry id');
@@ -270,22 +280,8 @@ function add_(r) {
   var lines = r.lines;
   if (!Array.isArray(lines) || lines.length < 1 || lines.length > 30) throw new Error('Bad lines');
 
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var ex = ss.getSheetByName('Expenses');
-  if (!ex) throw new Error('Run setup() first.');
-
-  // Retries from a phone with a bad signal must never double-book an entry.
-  var last = lastDataRow_(ex);
-  if (last >= 2) {
-    var ids = ex.getRange(2, 1, last - 1, 1).getValues();
-    for (var i = 0; i < ids.length; i++) {
-      if (String(ids[i][0]) === id) return { ok: true, duplicate: true };
-    }
-  }
-
   var parts = r.date.split('-');
   var date = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-  var now = new Date();
   var merchant = clean_(r.merchant, 80);
   var note = clean_(r.note, 200);
   var paidBy = clean_(r.paidBy, 40);
@@ -300,17 +296,73 @@ function add_(r) {
     if (!category) throw new Error('Missing category');
     data.push([id, date, merchant, category, note, cents / 100, paidBy, account]);
   }
+  return { id: id, date: date, merchant: merchant, data: data };
+}
 
-  var start = last + 1;
+function expenseRows_(ex, id) {
+  var rows = [];
+  var last = lastDataRow_(ex);
+  if (last >= 2) {
+    var ids = ex.getRange(2, 1, last - 1, 1).getValues();
+    for (var i = 0; i < ids.length; i++) if (String(ids[i][0]) === id) rows.push(i + 2);
+  }
+  return rows;
+}
+
+function add_(r) {
+  var p = parseReceipt_(r);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ex = ss.getSheetByName('Expenses');
+  if (!ex) throw new Error('Run setup() first.');
+
+  // Retries from a phone with a bad signal must never double-book an entry.
+  if (expenseRows_(ex, p.id).length) return { ok: true, duplicate: true };
+
+  appendExpense_(ex, p.data, new Date());
+  writeItems_(ss, p.id, p.date, p.merchant, r.items);
+  return { ok: true };
+}
+
+function appendExpense_(ex, data, entered) {
+  var start = lastDataRow_(ex) + 1;
   if (start + data.length - 1 > ex.getMaxRows()) {
     ex.insertRowsAfter(ex.getMaxRows(), Math.max(200, data.length));
   }
   ex.getRange(start, 1, data.length, 8).setValues(data);
-  var entered = [];
-  for (var k = 0; k < data.length; k++) entered.push([now]);
-  ex.getRange(start, COL.ENTERED, data.length, 1).setValues(entered);
-  writeItems_(ss, id, date, merchant, r.items);
+  var stamp = [];
+  for (var k = 0; k < data.length; k++) stamp.push([entered]);
+  ex.getRange(start, COL.ENTERED, data.length, 1).setValues(stamp);
+}
+
+// Changes an entry in place. The id stays the same, so its notes and receipt photo stay attached.
+// An entry the Sheet has never seen is simply added, so a retry is always safe.
+function edit_(r) {
+  var p = parseReceipt_(r);
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var ex = ss.getSheetByName('Expenses');
+  if (!ex) throw new Error('Run setup() first.');
+  var rows = expenseRows_(ex, p.id);
+  if (!rows.length) return add_(r);
+
+  var entered = ex.getRange(rows[0], COL.ENTERED, 1, 1).getValue() || new Date();
+  if (rows.length === p.data.length) {
+    for (var i = 0; i < rows.length; i++) ex.getRange(rows[i], 1, 1, 8).setValues([p.data[i]]);
+  } else {
+    for (var q = rows.length - 1; q >= 0; q--) ex.deleteRow(rows[q]);
+    appendExpense_(ex, p.data, entered);
+  }
+  retagItems_(ss, p.id, p.date, p.merchant);
   return { ok: true };
+}
+
+// Scanned line items keep their own copy of the date and merchant. Keep it in step with an edit.
+function retagItems_(ss, id, date, merchant) {
+  var it = ss.getSheetByName('Items');
+  if (!it || it.getLastRow() < 2) return;
+  var ids = it.getRange(2, 1, it.getLastRow() - 1, 1).getValues();
+  for (var i = 0; i < ids.length; i++) {
+    if (String(ids[i][0]) === id) it.getRange(i + 2, 2, 1, 2).setValues([[date, merchant]]);
+  }
 }
 
 // Optional line-by-line detail from a scanned receipt. Never blocks the expense itself.
@@ -445,6 +497,25 @@ function addIncome_(e) {
   return { ok: true };
 }
 
+function editIncome_(e) {
+  if (!e || typeof e !== 'object') throw new Error('Missing entry');
+  var id = String(e.id || '');
+  if (!validId_(id)) throw new Error('Bad entry id');
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Income');
+  var row = findRow_(sh, id);
+  if (row < 0) return addIncome_(e); // never seen by the Sheet, so add it
+  if (!isDate_(e.date)) throw new Error('Bad date');
+  var person = clean_(e.person, 40), job = clean_(e.job, 60);
+  if (!person || !job) throw new Error('Missing person or job');
+  if (!isCents_(e.net, 1, 1000000000)) throw new Error('Bad amount');
+  var hasGross = e.gross !== null && e.gross !== undefined && e.gross !== '';
+  if (hasGross && !isCents_(e.gross, e.net, 1000000000)) throw new Error('Bad gross amount');
+  sh.getRange(row, 1, 1, 9).setValues([[id, toDate_(e.date), person, job,
+    hasGross ? e.gross / 100 : '', e.net / 100, hasGross ? (e.gross - e.net) / 100 : '',
+    clean_(e.account, 40), clean_(e.note, 200)]]);
+  return { ok: true };
+}
+
 function removeIncome_(id) {
   id = String(id || '');
   if (!id) throw new Error('Missing id');
@@ -478,6 +549,90 @@ function removeJob_(id) {
   var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Jobs');
   var r = findRow_(sh, id);
   if (r > 0) sh.deleteRow(r); // past paycheques keep the job name as text, so history is untouched
+  return { ok: true, removed: r > 0 ? 1 : 0 };
+}
+
+/* ---------- Accounts and balances ---------- */
+
+function accountList_(ss) {
+  var sh = ss.getSheetByName('Accounts');
+  var out = [];
+  if (!sh || sh.getLastRow() < 2) return out;
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, 5).getValues();
+  for (var i = 0; i < vals.length; i++) {
+    var v = vals[i];
+    if (!v[0]) continue;
+    out.push({ id: String(v[0]), name: String(v[1]), type: String(v[2]), owner: String(v[3]), active: !(v[4] === false || String(v[4]).toUpperCase() === 'FALSE') });
+  }
+  return out;
+}
+
+function balanceList_(ss) {
+  var sh = ss.getSheetByName('Balances');
+  var out = [];
+  if (!sh || sh.getLastRow() < 2) return out;
+  var first = Math.max(2, sh.getLastRow() - 3000 + 1); // the latest few thousand is years of weekly updates
+  var vals = sh.getRange(first, 1, sh.getLastRow() - first + 1, 4).getValues();
+  for (var i = 0; i < vals.length; i++) {
+    var v = vals[i];
+    if (!v[0]) continue;
+    out.push({ id: String(v[0]), accountId: String(v[1]), date: fmtDate_(v[2]), balance: Number(v[3]) || 0 });
+  }
+  return out;
+}
+
+function saveAccount_(a) {
+  if (!a || typeof a !== 'object') throw new Error('Missing account');
+  var id = String(a.id || '');
+  if (!validId_(id)) throw new Error('Bad account id');
+  var name = clean_(a.name, 60), owner = clean_(a.owner, 40);
+  if (!name) throw new Error('Missing account name');
+  if (ACCOUNT_TYPES.indexOf(String(a.type)) < 0) throw new Error('Bad account type');
+  var sh = ensureTab_(SpreadsheetApp.getActiveSpreadsheet(), 'Accounts', ACCOUNT_HEADERS);
+  var row = findRow_(sh, id);
+  if (row < 0) row = sh.getLastRow() + 1;
+  sh.getRange(row, 1, 1, 5).setValues([[id, name, String(a.type), owner, a.active !== false]]);
+  return { ok: true };
+}
+
+// Removing an account also removes its balance history, so nothing is left pointing at nothing.
+function removeAccount_(id) {
+  id = String(id || '');
+  if (!id) throw new Error('Missing id');
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var bs = ss.getSheetByName('Balances');
+  if (bs && bs.getLastRow() >= 2) {
+    var vals = bs.getRange(2, 1, bs.getLastRow() - 1, 2).getValues();
+    for (var i = vals.length - 1; i >= 0; i--) if (String(vals[i][1]) === id) bs.deleteRow(i + 2);
+  }
+  var sh = ss.getSheetByName('Accounts');
+  var r = findRow_(sh, id);
+  if (r > 0) sh.deleteRow(r);
+  return { ok: true, removed: r > 0 ? 1 : 0 };
+}
+
+function addBalance_(b) {
+  if (!b || typeof b !== 'object') throw new Error('Missing balance');
+  var id = String(b.id || ''), accountId = String(b.accountId || '');
+  if (!validId_(id)) throw new Error('Bad balance id');
+  if (!isDate_(b.date)) throw new Error('Bad date');
+  if (!isCents_(b.cents, -100000000000, 100000000000)) throw new Error('Bad amount');
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (findRow_(ss.getSheetByName('Accounts'), accountId) < 0) throw new Error('Unknown account');
+  var sh = ensureTab_(ss, 'Balances', BALANCE_HEADERS);
+  if (findRow_(sh, id) > 0) return { ok: true, duplicate: true };
+  var row = sh.getLastRow() + 1;
+  sh.getRange(row, 1, 1, 4).setValues([[id, accountId, toDate_(b.date), b.cents / 100]]);
+  sh.getRange(row, 5, 1, 1).setValues([[new Date()]]);
+  return { ok: true };
+}
+
+function removeBalance_(id) {
+  id = String(id || '');
+  if (!id) throw new Error('Missing id');
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Balances');
+  var r = findRow_(sh, id);
+  if (r > 0) sh.deleteRow(r);
   return { ok: true, removed: r > 0 ? 1 : 0 };
 }
 

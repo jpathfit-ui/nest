@@ -76,6 +76,61 @@ check('Rejects an empty note', !call({ action: 'addNote', note: { ...note, id: '
 check('Rejects a note with a bad entry id', !call({ action: 'addNote', note: { ...note, id: 'n_note000000000003', entryId: '..' } }).ok);
 check('Removes a note', (call({ action: 'removeNote', id: note.id }), call({ action: 'list' }).notes.length === 0));
 
+// Editing an expense
+const rc = { id: 'r_edit0000000001', date: '2026-11-10', merchant: 'Costco', paidBy: 'Sue', account: 'Credit Card', note: '', lines: [{ category: 'Groceries', cents: 8000 }, { category: 'Household', cents: 2000 }] };
+check('Adds an expense to edit', call({ action: 'add', receipt: rc }).ok);
+call({ action: 'add', receipt: { ...rc, id: 'r_other000000001', merchant: 'Shoppers', lines: [{ category: 'Other', cents: 500 }] } });
+const rowsOf = id => sheets.Expenses.data.filter(r => r[0] === id);
+const stamp = rowsOf(rc.id)[0][9];
+check('Edit with the same number of lines changes it in place', (call({ action: 'edit', receipt: { ...rc, merchant: 'Costco Wholesale', note: 'Bulk', lines: [{ category: 'Groceries', cents: 7500 }, { category: 'Household', cents: 2500 }] } }), rowsOf(rc.id).length === 2 && rowsOf(rc.id)[0][2] === 'Costco Wholesale' && rowsOf(rc.id)[0][5] === 75 && rowsOf(rc.id)[1][5] === 25 && rowsOf(rc.id)[0][4] === 'Bulk'));
+check('Edit keeps the same id and the original entered time', rowsOf(rc.id)[0][0] === rc.id && rowsOf(rc.id)[0][9] === stamp);
+check('Edit with fewer lines drops the extra row', (call({ action: 'edit', receipt: { ...rc, lines: [{ category: 'Groceries', cents: 10000 }] } }), rowsOf(rc.id).length === 1 && rowsOf(rc.id)[0][5] === 100));
+check('Edit with more lines adds the rows', (call({ action: 'edit', receipt: { ...rc, lines: [{ category: 'Groceries', cents: 6000 }, { category: 'Household', cents: 3000 }, { category: 'Other', cents: 1000 }] } }), rowsOf(rc.id).length === 3 && rowsOf(rc.id).reduce((t, r) => t + r[5], 0) === 100 && rowsOf(rc.id)[0][9] === stamp));
+check('Editing one entry leaves the others alone', rowsOf('r_other000000001').length === 1 && rowsOf('r_other000000001')[0][2] === 'Shoppers');
+l = call({ action: 'list' });
+check('The list shows the edited entry once', l.rows.filter(r => r.id === rc.id).length === 3);
+check('Editing an entry the Sheet never saw adds it', (call({ action: 'edit', receipt: { ...rc, id: 'r_new00000000001', merchant: 'Fresh' } }), rowsOf('r_new00000000001').length === 2));
+check('A retried edit does not double the rows', (call({ action: 'edit', receipt: { ...rc, id: 'r_new00000000001', merchant: 'Fresh' } }), rowsOf('r_new00000000001').length === 2));
+check('Edit rejects a bad amount', !call({ action: 'edit', receipt: { ...rc, lines: [{ category: 'Groceries', cents: 0 }] } }).ok);
+check('Edit rejects a missing merchant', !call({ action: 'edit', receipt: { ...rc, merchant: ' ' } }).ok);
+check('A rejected edit leaves the entry as it was', rowsOf(rc.id).length === 3);
+sheets.Items = new Sheet('Items'); sheets.Items.data = [['Receipt ID', 'Date', 'Merchant', 'Item']];
+sheets.Items.data.push([rc.id, '2026-11-10', 'Costco', 'Milk'], ['r_other000000001', '2026-11-10', 'Shoppers', 'Gum']);
+call({ action: 'edit', receipt: { ...rc, merchant: 'Costco Mississauga', date: '2026-11-12' } });
+check('Scanned items follow the new merchant and date', sheets.Items.data[1][2] === 'Costco Mississauga' && sheets.Items.data[1][1] instanceof Date && sheets.Items.data[1][1].getDate() === 12 && sheets.Items.data[2][2] === 'Shoppers');
+
+// Editing a paycheque
+const inc = { id: 'i_pay00000000001', date: '2026-11-13', person: 'John', job: 'CAMH', gross: 300000, net: 220000, account: 'Chequing', note: '' };
+call({ action: 'addIncome', entry: inc });
+call({ action: 'addIncome', entry: { ...inc, id: 'i_pay00000000002', person: 'Sue', job: 'School' } });
+check('Edits a paycheque in place', (call({ action: 'editIncome', entry: { ...inc, net: 225000, gross: 305000, note: 'Raise' } }), sheets.Income.data.filter(r => r[0] === inc.id).length === 1 && sheets.Income.data.find(r => r[0] === inc.id)[5] === 2250));
+check('Deductions follow the edit', sheets.Income.data.find(r => r[0] === inc.id)[6] === 800);
+check('The entered time and the other paycheque are untouched', sheets.Income.data.find(r => r[0] === inc.id)[9] instanceof Date && sheets.Income.data.find(r => r[0] === 'i_pay00000000002')[3] === 'School');
+check('Edit can clear the gross pay', (call({ action: 'editIncome', entry: { ...inc, gross: null } }), sheets.Income.data.find(r => r[0] === inc.id)[4] === ''));
+check('Income edit rejects gross below net', !call({ action: 'editIncome', entry: { ...inc, gross: 100 } }).ok);
+check('Income edit of an unseen paycheque adds it', (call({ action: 'editIncome', entry: { ...inc, id: 'i_pay00000000003' } }), sheets.Income.data.filter(r => r[0] === 'i_pay00000000003').length === 1));
+check('The edited paycheque comes back in the list', call({ action: 'list' }).income.find(r => r.id === inc.id).net === 2200);
+
+// Accounts and balances
+const acct = { id: 'a_chq0000000000001', name: 'TD Chequing', type: 'Chequing', owner: 'Joint', active: true };
+check('Saves an account', call({ action: 'saveAccount', account: acct }).ok);
+call({ action: 'saveAccount', account: { ...acct, name: 'TD Everyday' } });
+l = call({ action: 'list' });
+check('Updating an account does not add a row', l.accounts.length === 1 && l.accounts[0].name === 'TD Everyday' && l.accounts[0].active === true, JSON.stringify(l.accounts));
+check('Rejects a bad account type', !call({ action: 'saveAccount', account: { ...acct, type: 'Pirate chest' } }).ok);
+check('Rejects an account with no name', !call({ action: 'saveAccount', account: { ...acct, name: ' ' } }).ok);
+const bal = { id: 'b_bal0000000000001', accountId: acct.id, date: '2026-11-01', cents: 345678 };
+check('Adds a balance', call({ action: 'addBalance', balance: bal }).ok);
+check('A retried balance is not added twice', (call({ action: 'addBalance', balance: bal }), call({ action: 'list' }).balances.length === 1));
+check('Balance comes back in dollars with its date', (l = call({ action: 'list' }), l.balances[0].balance === 3456.78 && l.balances[0].date === '2026-11-01' && l.balances[0].accountId === acct.id));
+check('A negative balance is allowed', call({ action: 'addBalance', balance: { ...bal, id: 'b_bal0000000000002', date: '2026-11-08', cents: -5000 } }).ok);
+check('Rejects a balance for an unknown account', !call({ action: 'addBalance', balance: { ...bal, id: 'b_bal0000000000003', accountId: 'a_nobody000000001' } }).ok);
+check('Rejects a fractional cent amount', !call({ action: 'addBalance', balance: { ...bal, id: 'b_bal0000000000004', cents: 10.5 } }).ok);
+check('Rejects a bad balance date', !call({ action: 'addBalance', balance: { ...bal, id: 'b_bal0000000000005', date: 'soon' } }).ok);
+check('Removes one balance', (call({ action: 'removeBalance', id: 'b_bal0000000000002' }), call({ action: 'list' }).balances.length === 1));
+call({ action: 'addBalance', balance: { ...bal, id: 'b_bal0000000000006', date: '2026-11-15', cents: 400000 } });
+check('Removing an account removes its balances too', (call({ action: 'removeAccount', id: acct.id }), (l = call({ action: 'list' }), l.accounts.length === 0 && l.balances.length === 0)));
+
 // Safety
 check('A wrong PIN is refused for the new actions', JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ pin: '000000', action: 'saveBudget', category: 'Gas', cents: 100 }) } }).t).ok === false);
 check('Unknown actions are still refused', call({ action: 'nope' }).ok === false);

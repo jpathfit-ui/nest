@@ -15,6 +15,7 @@ const CATS = ['Groceries', 'Dining Out', 'Household', 'Utilities', 'Phone and In
 const pad = n => String(n).padStart(2, '0');
 const ymd = d => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
 const today = ymd(new Date());
+const daysBack = n => { const d = new Date(); d.setDate(d.getDate() - n); return ymd(d); };
 
 const server = http.createServer((req, res) => {
   let p = req.url.split('?')[0]; if (p === '/') p = '/index.html';
@@ -26,7 +27,7 @@ const server = http.createServer((req, res) => {
 });
 
 function newSheet() {
-  return { rows: [], income: [], jobs: [], budgets: [], bills: [], notes: [], old: false, calls: [] };
+  return { rows: [], income: [], jobs: [], budgets: [], bills: [], notes: [], accounts: [], balances: [], old: false, calls: [] };
 }
 function sheetHandler(sheet) {
   return async route => {
@@ -38,22 +39,30 @@ function sheetHandler(sheet) {
     const ok = o => route.fulfill({ status: 200, headers: { ...cors, 'content-type': 'application/json' }, body: JSON.stringify({ ok: true, ...o }) });
     const bad = m => route.fulfill({ status: 200, headers: { ...cors, 'content-type': 'application/json' }, body: JSON.stringify({ ok: false, error: m }) });
     if (b.pin !== PIN) return bad('Wrong PIN');
-    const NEW = ['saveBudget', 'removeBudget', 'saveBill', 'removeBill', 'addNote', 'removeNote'];
+    const NEW = ['saveBudget', 'removeBudget', 'saveBill', 'removeBill', 'addNote', 'removeNote', 'edit', 'editIncome', 'saveAccount', 'removeAccount', 'addBalance', 'removeBalance'];
     if (sheet.old && NEW.includes(b.action)) return bad('Unknown action');
     switch (b.action) {
       case 'list': return ok({
         rows: sheet.rows, income: sheet.income, jobs: sheet.jobs,
-        ...(sheet.old ? {} : { budgets: sheet.budgets, bills: sheet.bills, notes: sheet.notes }),
+        ...(sheet.old ? {} : { budgets: sheet.budgets, bills: sheet.bills, notes: sheet.notes, accounts: sheet.accounts, balances: sheet.balances }),
         meta: { people: ['John', 'Sue'], accounts: [], categories: CATS, multiplier: 2, sheetUrl: 'https://example.com/sheet' }
       });
       case 'add': b.receipt.lines.forEach(l => sheet.rows.push({ id: b.receipt.id, date: b.receipt.date, merchant: b.receipt.merchant, category: l.category, note: b.receipt.note || '', amount: l.cents / 100, paidBy: b.receipt.paidBy, account: b.receipt.account || '', ratio: null })); return ok({});
+      case 'edit': { const rc = b.receipt; sheet.rows = sheet.rows.filter(r => r.id !== rc.id); rc.lines.forEach(l => sheet.rows.push({ id: rc.id, date: rc.date, merchant: rc.merchant, category: l.category, note: rc.note || '', amount: l.cents / 100, paidBy: rc.paidBy, account: rc.account || '', ratio: null })); return ok({}); }
       case 'remove': sheet.rows = sheet.rows.filter(r => r.id !== b.id); return ok({});
+      case 'addIncome': { const e = b.entry; if (!sheet.income.some(r => r.id === e.id)) sheet.income.push({ id: e.id, date: e.date, person: e.person, job: e.job, gross: e.gross === null ? null : e.gross / 100, net: e.net / 100, account: e.account || '', note: e.note || '' }); return ok({}); }
+      case 'editIncome': { const e = b.entry; sheet.income = sheet.income.filter(r => r.id !== e.id); sheet.income.push({ id: e.id, date: e.date, person: e.person, job: e.job, gross: e.gross === null ? null : e.gross / 100, net: e.net / 100, account: e.account || '', note: e.note || '' }); return ok({}); }
+      case 'removeIncome': sheet.income = sheet.income.filter(r => r.id !== b.id); return ok({});
       case 'saveBudget': { const i = sheet.budgets.findIndex(x => x.category === b.category); const o = { category: b.category, limit: b.cents / 100 }; if (i >= 0) sheet.budgets[i] = o; else sheet.budgets.push(o); return ok({}); }
       case 'removeBudget': sheet.budgets = sheet.budgets.filter(x => x.category !== b.category); return ok({});
       case 'saveBill': { const x = b.bill, o = { id: x.id, name: x.name, amount: x.cents / 100, category: x.category, freq: x.freq, nextDue: x.nextDue, day: x.day, active: x.active }; const i = sheet.bills.findIndex(y => y.id === x.id); if (i >= 0) sheet.bills[i] = o; else sheet.bills.push(o); return ok({}); }
       case 'removeBill': sheet.bills = sheet.bills.filter(x => x.id !== b.id); return ok({});
       case 'addNote': if (!sheet.notes.some(n => n.id === b.note.id)) sheet.notes.push({ ...b.note }); return ok({});
       case 'removeNote': sheet.notes = sheet.notes.filter(n => n.id !== b.id); return ok({});
+      case 'saveAccount': { const a = b.account, i = sheet.accounts.findIndex(x => x.id === a.id); if (i >= 0) sheet.accounts[i] = { ...a }; else sheet.accounts.push({ ...a }); return ok({}); }
+      case 'removeAccount': sheet.accounts = sheet.accounts.filter(x => x.id !== b.id); sheet.balances = sheet.balances.filter(x => x.accountId !== b.id); return ok({});
+      case 'addBalance': if (!sheet.accounts.some(x => x.id === b.balance.accountId)) return bad('Unknown account'); if (!sheet.balances.some(x => x.id === b.balance.id)) sheet.balances.push({ id: b.balance.id, accountId: b.balance.accountId, date: b.balance.date, balance: b.balance.cents / 100 }); return ok({});
+      case 'removeBalance': sheet.balances = sheet.balances.filter(x => x.id !== b.id); return ok({});
       case 'scan': return ok({ receipt: { merchant: 'Test Mart', date: today, total: 12.5, tax: 0, items: [
         { description: 'Milk', amount: 4.5, category: 'Groceries', section: '', taxed: null },
         { description: 'Bread', amount: 8, category: 'Groceries', section: '', taxed: null }] } });
@@ -83,6 +92,7 @@ async function mk(browser, { sheet, connected = false, who = 'John', reducedMoti
   return { ctx, page };
 }
 const hash = page => page.evaluate(() => location.hash);
+const openCard = async (page, name, act = 'edit') => { if (!(await page.isVisible('[data-act="' + act + '"]'))) await page.click('.rc-main >> text=' + name); };
 const go = async (page, h) => { await page.evaluate(h => { location.hash = h; }, h); await page.waitForTimeout(150); };
 const text = (page, sel = '#view') => page.textContent(sel);
 const pill = page => page.textContent('.pill');
@@ -338,6 +348,210 @@ const synced = page => page.waitForFunction(() => /^\s*Synced/.test(document.que
     await ctx.close();
   }
 
+  // ---------- 5b. Editing entries ----------
+  {
+    const sheet = newSheet();
+    const SID = 'r_edit00000000000001';
+    sheet.rows.push({ id: SID, date: today, merchant: 'Costco', category: 'Groceries', note: '', amount: 80, paidBy: 'Sue', account: '', ratio: null });
+    sheet.rows.push({ id: SID, date: today, merchant: 'Costco', category: 'Household', note: '', amount: 20, paidBy: 'Sue', account: '', ratio: null });
+    sheet.notes.push({ id: 'n_edit00000000000001', entryId: SID, author: 'Sue', text: 'For the party', ts: Date.now() - 60000 });
+    sheet.income.push({ id: 'i_edit00000000000001', date: today, person: 'John', job: 'CAMH', gross: 3000, net: 2200, account: '', note: '' });
+    const { ctx, page } = await mk(browser, { sheet, connected: true, who: 'John' });
+    await synced(page);
+    await go(page, '#/expenses');
+    await page.click('.rc-main >> text=Costco');
+    check('Expanded entry has an Edit button next to Delete', await page.isVisible('[data-act="edit"]') && await page.isVisible('[data-act="del"]'));
+    await page.click('[data-act="edit"]');
+    await page.waitForFunction(() => location.hash === '#/expenses/edit');
+    check('Edit opens the form with the entry filled in', (await page.inputValue('#f-merchant')) === 'Costco' && (await page.inputValue('#f-total')) === '100.00');
+    check('A split entry opens already split', await page.isVisible('#splitbox') && (await page.$$eval('#lines select', e => e.map(x => x.value))).join() === 'Groceries,Household');
+    check('Split amounts are filled in', (await page.$eval('#lines input[data-k="amt"]', e => e.value)) === '20.00');
+    check('Edit form hides scan and paste', !(await page.isVisible('[data-act="scan"]')) && !/Paste receipt text/.test(await text(page)));
+    check('Edit form says Save changes', /Save changes/.test(await text(page)));
+    await page.fill('#f-merchant', 'Costco Wholesale');
+    await page.fill('#f-total', '120'); await page.dispatchEvent('#f-total', 'change');
+    await page.fill('#lines input[data-k="amt"]', '30'); await page.dispatchEvent('#lines input[data-k="amt"]', 'change');
+    await page.click('form[data-form="add"] button.btn.pri');
+    await page.waitForFunction(() => location.hash === '#/expenses');
+    await page.waitForTimeout(200);
+    const list1 = await text(page);
+    check('The edit shows straight away', /Costco Wholesale/.test(list1) && /\$120\.00/.test(list1) && !/\$100\.00/.test(list1), list1.slice(0, 200));
+    check('The edited entry is not duplicated', (await page.$$eval('.rc-name', e => e.filter(x => /Costco/.test(x.textContent)).length)) === 1);
+    check('Toast confirms the change', /Saved changes to Costco Wholesale/.test(await text(page, '#toast')));
+    await synced(page);
+    check('The edit reached the Sheet as an edit, not a delete and add', sheet.calls.includes('edit') && !sheet.calls.includes('remove'));
+    check('The Sheet holds the new lines under the same id', sheet.rows.filter(r => r.id === SID).length === 2 && sheet.rows.filter(r => r.id === SID).reduce((t, r) => t + r.amount, 0) === 120 && sheet.rows[0].merchant === 'Costco Wholesale');
+    await openCard(page, 'Costco Wholesale');
+    check('Notes stay with the edited entry', /For the party/.test(await text(page)));
+    // Undo puts it back
+    await page.click('[data-act="edit"]');
+    await page.waitForFunction(() => location.hash === '#/expenses/edit');
+    await page.fill('#f-merchant', 'Oops'); await page.click('form[data-form="add"] button.btn.pri');
+    await page.waitForFunction(() => location.hash === '#/expenses');
+    await page.click('#toast [data-act="toastAct"]');
+    await page.waitForTimeout(250); await synced(page);
+    check('Undo brings the entry back as it was', /Costco Wholesale/.test(await text(page)) && !/Oops/.test(await text(page)) && sheet.rows.every(r => r.merchant === 'Costco Wholesale'));
+    // Turning a split into one category
+    await openCard(page, 'Costco Wholesale');
+    await page.click('[data-act="edit"]');
+    await page.waitForFunction(() => location.hash === '#/expenses/edit');
+    await page.click('[data-act="unsplit"]');
+    await page.selectOption('#f-cat', 'Household');
+    await page.click('form[data-form="add"] button.btn.pri');
+    await page.waitForFunction(() => location.hash === '#/expenses');
+    await synced(page);
+    check('A split can be turned into one category', sheet.rows.filter(r => r.id === SID).length === 1 && sheet.rows.find(r => r.id === SID).category === 'Household' && sheet.rows.find(r => r.id === SID).amount === 120);
+    // Edit with no draft goes back to the list instead of showing a blank form
+    await go(page, '#/expenses/edit');
+    await page.waitForFunction(() => location.hash === '#/expenses', null, { timeout: 3000 });
+    check('Opening the edit page directly goes back to the list', (await hash(page)) === '#/expenses');
+    // Leaving the edit form drops it, so Add starts clean
+    await openCard(page, 'Costco Wholesale');
+    await page.click('[data-act="edit"]');
+    await page.waitForFunction(() => location.hash === '#/expenses/edit');
+    await go(page, '#/expenses/add');
+    await page.waitForFunction(() => /Save expense/.test(document.querySelector('#view').textContent), null, { timeout: 5000 });
+    const addVals = [await hash(page), await page.inputValue('#f-merchant'), await page.inputValue('#f-total')];
+    check('Add after a cancelled edit starts empty', addVals[0] === '#/expenses/add' && addVals[1] === '' && addVals[2] === '', JSON.stringify(addVals));
+
+    // Paycheque
+    await go(page, '#/income');
+    await openCard(page, 'CAMH', 'iedit');
+    await page.click('[data-act="iedit"]');
+    await page.waitForFunction(() => location.hash === '#/income/edit');
+    check('Paycheque edit is filled in', (await page.inputValue('#p-net')) === '2200.00' && (await page.inputValue('#p-gross')) === '3000.00' && (await page.inputValue('#p-name')) === 'CAMH');
+    await page.fill('#p-net', '2250'); await page.dispatchEvent('#p-net', 'change');
+    await page.click('form[data-form="pay"] button.btn.pri');
+    await page.waitForFunction(() => location.hash === '#/income');
+    await page.waitForTimeout(200);
+    check('Paycheque edit shows straight away', /\$2,250\.00/.test(await text(page)) && !/\$2,200\.00/.test(await text(page)));
+    await synced(page);
+    check('Paycheque edit reached the Sheet as an edit', sheet.calls.includes('editIncome') && !sheet.calls.includes('removeIncome') && sheet.income.length === 1 && sheet.income[0].net === 2250);
+    await ctx.close();
+  }
+
+  // ---------- 5c. Editing something that has not synced yet ----------
+  {
+    const sheet = newSheet();
+    const { ctx, page } = await mk(browser);
+    await addExpense(page, '40', 'Tims', 'Dining Out');
+    await go(page, '#/expenses');
+    await page.click('.rc-main >> text=Tims');
+    await page.click('[data-act="edit"]');
+    await page.waitForFunction(() => location.hash === '#/expenses/edit');
+    await page.fill('#f-total', '45.50'); await page.dispatchEvent('#f-total', 'change');
+    await page.fill('#f-merchant', 'Tim Hortons');
+    await page.click('form[data-form="add"] button.btn.pri');
+    await page.waitForFunction(() => location.hash === '#/expenses');
+    const q = await page.evaluate(() => JSON.parse(localStorage.getItem('ledger.queue')));
+    check('An unsynced entry is changed in place, still one queued add', q.length === 1 && q[0].type === 'add' && q[0].receipt.merchant === 'Tim Hortons' && q[0].receipt.lines[0].cents === 4550, JSON.stringify(q));
+    check('It still says waiting to sync', /Waiting to sync/.test(await text(page)));
+    await ctx.close();
+    const c2 = await mk(browser, { sheet, connected: true });
+    await synced(c2.page);
+    await addExpense(c2.page, '12', 'Bagel', 'Dining Out');
+    await synced(c2.page);
+    await go(c2.page, '#/expenses');
+    await openCard(c2.page, 'Bagel');
+    await c2.page.click('[data-act="edit"]');
+    await c2.page.waitForFunction(() => location.hash === '#/expenses/edit');
+    await c2.page.fill('#f-total', '14'); await c2.page.dispatchEvent('#f-total', 'change');
+    await c2.page.click('form[data-form="add"] button.btn.pri');
+    await c2.page.waitForFunction(() => location.hash === '#/expenses');
+    await synced(c2.page);
+    check('A synced entry edited once sends one edit', sheet.calls.filter(c => c === 'edit').length === 1 && sheet.rows.find(r => r.merchant === 'Bagel').amount === 14);
+    await c2.ctx.close();
+  }
+
+  // ---------- 5d. Accounts, balances and net worth ----------
+  {
+    const sheet = newSheet();
+    const { ctx, page } = await mk(browser, { sheet });
+    await go(page, '#/accounts');
+    check('Accounts starts with a clear empty state', /See what you own and owe/.test(await text(page)));
+    const addAcct = async (name, type) => {
+      await go(page, '#/accounts/account');
+      await page.fill('#a-name', name); await page.selectOption('#a-type', type);
+      await page.click('form[data-form="account"] button.btn.pri');
+      await page.waitForSelector('#bal-amt');
+    };
+    const saveBal = async amt => { await page.fill('#bal-amt', amt); await page.click('form[data-form="balance"] button.btn.pri'); await page.waitForSelector('.hero .big'); await page.waitForTimeout(150); };
+    await addAcct('td chequing', 'Chequing');
+    check('A new account goes straight to its first balance', /first balance/.test(await text(page)) && /Td chequing/.test(await page.$eval('#bal-acct', e => e.selectedOptions[0].textContent)));
+    await saveBal('5000');
+    check('Net worth shows the first balance', /Net worth/.test(await text(page)) && /\$5,000\.00/.test(await text(page, '.big')));
+    await addAcct('Visa', 'Credit card');
+    check('A debt asks for the amount owing', /Amount owing today/.test(await text(page)));
+    await saveBal('1200');
+    check('Debts subtract from net worth', /\$3,800\.00/.test(await text(page, '.big')) && /Assets \$5,000\.00 · Owing \$1,200\.00/.test(await text(page)));
+    check('Accounts are grouped into assets and owing', /Assets/.test(await text(page, 'h2')) && (await page.$$eval('h2', e => e.map(x => x.textContent))).join().includes('Owing'));
+    await go(page, '#/home');
+    check('Home shows the net worth', /Net worth/.test(await text(page)) && /\$3,800\.00/.test(await text(page)));
+    // History makes a trend and a change
+    await go(page, '#/accounts');
+    await page.click('.rc-main >> text=Td chequing');
+    await page.waitForSelector('#bal-amt');
+    await page.fill('#bal-amt', '4000'); await page.fill('#bal-date', daysBack(40)); await page.dispatchEvent('#bal-date', 'change');
+    await page.click('form[data-form="balance"] button.btn.pri');
+    await page.waitForSelector('.hero .big'); await page.waitForTimeout(200);
+    check('Net worth still uses the latest balance, not the older one', /\$3,800\.00/.test(await text(page, '.big')));
+    check('A chart appears once there is history', await page.isVisible('svg.nw'));
+    check('The line draws with an animation', (await page.$eval('.nwl', el => getComputedStyle(el).animationName)) === 'draw');
+    await page.click('svg.nw rect[data-i="0"]', { force: true });
+    const firstPt = await page.$eval('svg.nw', e => JSON.parse(e.dataset.pts)[0]);
+    check('Tapping the chart reads out that month', (await text(page, '#nwread')).includes(firstPt[2]) && (await text(page, '#nwread')).includes(firstPt[3]), firstPt.join('|'));
+    check('Shows the change since last month', /(Up|Down) \$/.test(await text(page)) && /since/.test(await text(page)));
+    // Stale
+    await go(page, '#/accounts/account');
+    await page.fill('#a-name', 'Old savings'); await page.selectOption('#a-type', 'Savings'); await page.click('form[data-form="account"] button.btn.pri');
+    await page.waitForSelector('#bal-amt');
+    await page.fill('#bal-amt', '900'); await page.fill('#bal-date', daysBack(60)); await page.dispatchEvent('#bal-date', 'change');
+    await page.click('form[data-form="balance"] button.btn.pri'); await page.waitForSelector('.hero .big');
+    check('An account not updated in over a month says so', /Needs an update/.test(await text(page)));
+    // Validation
+    await go(page, '#/accounts/account');
+    await page.fill('#a-name', 'visa'); await page.click('form[data-form="account"] button.btn.pri');
+    check('A duplicate account name is refused', /already have an account/.test(await text(page, '#err')));
+    await go(page, '#/accounts/balance');
+    await page.click('form[data-form="balance"] button.btn.pri');
+    check('An empty balance is refused', /Enter the balance/.test(await text(page, '#err')));
+    await page.fill('#bal-amt', '10'); await page.fill('#bal-date', '2999-01-01'); await page.dispatchEvent('#bal-date', 'change');
+    await page.click('form[data-form="balance"] button.btn.pri');
+    check('A future date is refused', /future/.test(await text(page, '#err')));
+    // Edit, close, delete with undo
+    await go(page, '#/accounts');
+    await page.click('[data-act="acctEdit"][aria-label="Edit Old savings"]');
+    await page.waitForSelector('#a-name');
+    check('Edit account shows its balance history', /Balance history/.test(await text(page)) && /\$900\.00/.test(await text(page)));
+    await page.click('[data-act="acctActive"][data-v="0"]');
+    await page.click('form[data-form="account"] button.btn.pri');
+    await page.waitForSelector('.hero .big');
+    check('A closed account leaves the list', !/Old savings/.test(await text(page)) && /Show 1 closed account/.test(await text(page)));
+    await page.click('[data-act="closedToggle"]');
+    check('Closed accounts can be shown again', /Old savings/.test(await text(page)));
+    await page.click('[data-act="acctEdit"][aria-label="Edit Visa"]');
+    await page.waitForSelector('#a-name');
+    await page.click('[data-act="acctDel"]');
+    await page.click('#modal [data-m="1"]');
+    await page.waitForSelector('.hero .big'); await page.waitForTimeout(150);
+    check('Deleting an account removes it and changes net worth', !/Visa/.test(await text(page, '.rc-name')) && /\$5,900\.00/.test(await text(page, '.big')));
+    await page.click('#toast [data-act="toastAct"]'); await page.waitForTimeout(200);
+    check('Undo brings the account and its balance back', /Visa/.test(await text(page)) && /\$4,700\.00/.test(await text(page, '.big')));
+    // Connect: everything saved offline reaches the Sheet
+    await ctx.route('https://script.google.com/**', sheetHandler(sheet));
+    await connectUI(page);
+    await synced(page);
+    check('Offline accounts and balances reach the Sheet', sheet.accounts.length === 3 && sheet.balances.length === 4 && sheet.accounts.some(a => a.name === 'Visa'), JSON.stringify([sheet.accounts.length, sheet.balances.length]));
+    await go(page, '#/accounts');
+    check('Net worth is the same after syncing', /\$4,700\.00/.test(await text(page, '.big')));
+    // Another phone sees them
+    const c2 = await mk(browser, { sheet, connected: true, who: 'Sue' });
+    await synced(c2.page); await go(c2.page, '#/accounts');
+    check('The other phone sees the same net worth', /\$4,700\.00/.test(await text(c2.page, '.big')));
+    await c2.ctx.close();
+    await ctx.close();
+  }
+
   // ---------- 6. Older Sheet script ----------
   {
     const sheet = newSheet(); sheet.old = true;
@@ -360,7 +574,7 @@ const synced = page => page.waitForFunction(() => /^\s*Synced/.test(document.que
     const { ctx, page } = await mk(browser, { sheet, connected: true });
     await synced(page);
     await addExpense(page, '10', 'Test', 'Groceries');
-    const routes = ['#/home', '#/expenses', '#/expenses/budgets', '#/expenses/budget', '#/expenses/bills', '#/expenses/bill', '#/expenses/add', '#/expenses/paste'];
+    const routes = ['#/home', '#/accounts', '#/accounts/account', '#/accounts/balance', '#/expenses', '#/expenses/budgets', '#/expenses/budget', '#/expenses/bills', '#/expenses/bill', '#/expenses/add', '#/expenses/paste'];
     let lower = [], wide = [];
     for (const r of routes) {
       await go(page, r);
