@@ -57,6 +57,10 @@ Accounts > Balances. Add each account with a type (chequing, savings, TFSA, RRSP
 
 Things to know: an account counts from its first balance, so net worth steps up when you add one. To close an account, enter a final balance of $0, then set it to Closed; its history stays. Deleting an account deletes its balances. The Settings tab list of accounts used on expenses is separate from these. Syncs to Accounts and Balances tabs. Statement import and the Investments tab (contribution room, holdings) come later.
 
+## Other in a dropdown
+
+Category and account dropdowns end with Other. Choose it, type the new name, tap Add (or press Enter), and it is selected and added to every dropdown straight away. It is also written to the Sheet: a new row on the Categories tab, or added to the Accounts line on the Settings tab, so it is there on the other phone after its next sync. Typing a name that already exists in any capitals picks the existing one. Offline it waits in the queue like everything else. Needs the newest `Code.gs`. Account types, how often, and the like stay fixed lists because the app does sums with them.
+
 ## Camera with no Sheet connected
 
 The camera button works before the Sheet is connected, and when the signal is gone. The photo is shrunk and kept on the phone, and the Add expense form opens with it at the top so you can type the details in from the photo or paste its text. When you save, the photo stays with that entry (open the entry and tap Receipt photo). A photo you do not finish is kept on Home with Add expense and Discard buttons. With a Sheet connected and a signal, Read photo on the form reads it for you, and the camera reads receipts straight away as before. Photos never leave the phone unless you read one with Gemini.
@@ -109,7 +113,7 @@ On the Add expense screen, Paste receipt text opens a box. Tap in it and choose 
 
 Tested: the app in a phone-sized browser against a simulated Sheet script (88 checks, plus 15 for pull to refresh, 28 for paste text and 33 for the text reader, including pay date rules across month ends, year ends, and clock changes), the script's real code against a simulated Google Sheet and a simulated Gemini reply (56 checks), and the tax split over 4,000 random receipts.
 
-Phase 5 brings `tests/test.js` to 110 checks on the app (offline camera, budgets, bills, notes, the activity feed, editing, accounts and net worth, capital letters, reduce motion) and `tests/script-test.js` to 54 checks running the real `Code.gs` against a fake Sheet.
+Phase 5 brings `tests/test.js` to 125 checks on the app (offline camera, budgets, bills, notes, the activity feed, editing, accounts and net worth, capital letters, reduce motion) and `tests/script-test.js` to 63 checks running the real `Code.gs` against a fake Sheet.
 
 Not tested: the iPhone Scan Text button (the app only provides the box), the script inside real Google services, and the reader on real receipts with a real Gemini key, because neither is reachable from where this was built. Start with a few receipts you can check by eye, and expect to correct some lines at first. Photos in good light, flat, and filling the frame read best.
 

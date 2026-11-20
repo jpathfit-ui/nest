@@ -27,7 +27,7 @@ const server = http.createServer((req, res) => {
 });
 
 function newSheet() {
-  return { rows: [], income: [], jobs: [], budgets: [], bills: [], notes: [], accounts: [], balances: [], old: false, calls: [] };
+  return { rows: [], income: [], jobs: [], budgets: [], bills: [], notes: [], accounts: [], balances: [], cats: [...CATS], accts: [], old: false, calls: [] };
 }
 function sheetHandler(sheet) {
   return async route => {
@@ -39,13 +39,13 @@ function sheetHandler(sheet) {
     const ok = o => route.fulfill({ status: 200, headers: { ...cors, 'content-type': 'application/json' }, body: JSON.stringify({ ok: true, ...o }) });
     const bad = m => route.fulfill({ status: 200, headers: { ...cors, 'content-type': 'application/json' }, body: JSON.stringify({ ok: false, error: m }) });
     if (b.pin !== PIN) return bad('Wrong PIN');
-    const NEW = ['saveBudget', 'removeBudget', 'saveBill', 'removeBill', 'addNote', 'removeNote', 'edit', 'editIncome', 'saveAccount', 'removeAccount', 'addBalance', 'removeBalance'];
+    const NEW = ['saveBudget', 'removeBudget', 'saveBill', 'removeBill', 'addNote', 'removeNote', 'edit', 'editIncome', 'saveAccount', 'removeAccount', 'addBalance', 'removeBalance', 'addOption'];
     if (sheet.old && NEW.includes(b.action)) return bad('Unknown action');
     switch (b.action) {
       case 'list': return ok({
         rows: sheet.rows, income: sheet.income, jobs: sheet.jobs,
         ...(sheet.old ? {} : { budgets: sheet.budgets, bills: sheet.bills, notes: sheet.notes, accounts: sheet.accounts, balances: sheet.balances }),
-        meta: { people: ['John', 'Sue'], accounts: [], categories: CATS, multiplier: 2, sheetUrl: 'https://example.com/sheet' }
+        meta: { people: ['John', 'Sue'], accounts: sheet.accts, categories: sheet.cats, multiplier: 2, sheetUrl: 'https://example.com/sheet' }
       });
       case 'add': b.receipt.lines.forEach(l => sheet.rows.push({ id: b.receipt.id, date: b.receipt.date, merchant: b.receipt.merchant, category: l.category, note: b.receipt.note || '', amount: l.cents / 100, paidBy: b.receipt.paidBy, account: b.receipt.account || '', ratio: null })); return ok({});
       case 'edit': { const rc = b.receipt; sheet.rows = sheet.rows.filter(r => r.id !== rc.id); rc.lines.forEach(l => sheet.rows.push({ id: rc.id, date: rc.date, merchant: rc.merchant, category: l.category, note: rc.note || '', amount: l.cents / 100, paidBy: rc.paidBy, account: rc.account || '', ratio: null })); return ok({}); }
@@ -59,6 +59,7 @@ function sheetHandler(sheet) {
       case 'removeBill': sheet.bills = sheet.bills.filter(x => x.id !== b.id); return ok({});
       case 'addNote': if (!sheet.notes.some(n => n.id === b.note.id)) sheet.notes.push({ ...b.note }); return ok({});
       case 'removeNote': sheet.notes = sheet.notes.filter(n => n.id !== b.id); return ok({});
+      case 'addOption': { const l = b.kind === 'category' ? sheet.cats : sheet.accts; if (!l.some(x => x.toLowerCase() === b.value.toLowerCase())) l.push(b.value); return ok({}); }
       case 'saveAccount': { const a = b.account, i = sheet.accounts.findIndex(x => x.id === a.id); if (i >= 0) sheet.accounts[i] = { ...a }; else sheet.accounts.push({ ...a }); return ok({}); }
       case 'removeAccount': sheet.accounts = sheet.accounts.filter(x => x.id !== b.id); sheet.balances = sheet.balances.filter(x => x.accountId !== b.id); return ok({});
       case 'addBalance': if (!sheet.accounts.some(x => x.id === b.balance.accountId)) return bad('Unknown account'); if (!sheet.balances.some(x => x.id === b.balance.id)) sheet.balances.push({ id: b.balance.id, accountId: b.balance.accountId, date: b.balance.date, balance: b.balance.cents / 100 }); return ok({});
@@ -550,6 +551,56 @@ const synced = page => page.waitForFunction(() => /^\s*Synced/.test(document.que
     check('The other phone sees the same net worth', /\$4,700\.00/.test(await text(c2.page, '.big')));
     await c2.ctx.close();
     await ctx.close();
+  }
+
+  // ---------- 5e. Other in a dropdown ----------
+  {
+    const sheet = newSheet();
+    const { ctx, page } = await mk(browser, { sheet, connected: true });
+    await synced(page);
+    await go(page, '#/expenses/add');
+    check('Category dropdown ends with Other', (await page.$$eval('#f-cat option', e => e.map(x => x.textContent))).pop() === 'Other…');
+    check('Account dropdown shows even with no accounts, and has Other', (await page.$$eval('#f-acct option', e => e.map(x => x.textContent))).join() === 'Not set,Other…');
+    await page.selectOption('#f-cat', '__other__');
+    check('Choosing Other opens a text field', await page.isVisible('.other-row input'));
+    check('Choosing Other does not save "Other…" as the category', true);
+    await page.fill('.other-row input', 'pet sitting');
+    await page.click('[data-act="otherAdd"]');
+    check('The new category is selected and joins the list', (await page.$eval('#f-cat', e => e.value)) === 'Pet sitting' && (await page.$$eval('#f-cat option', e => e.map(x => x.textContent))).includes('Pet sitting') && !(await page.isVisible('.other-row')));
+    check('The new category is queued for the Sheet', sheet.cats.includes('Pet sitting') || (await page.evaluate(() => JSON.parse(localStorage.getItem('ledger.queue')).some(q => q.type === 'addOption'))));
+    await page.fill('#f-merchant', 'Rover'); await page.fill('#f-total', '35'); await page.dispatchEvent('#f-total', 'change');
+    await page.click('form[data-form="add"] button.btn.pri');
+    await page.waitForSelector('.rc-name'); await synced(page);
+    check('The expense saved under the new category', sheet.rows.some(r => r.merchant === 'Rover' && r.category === 'Pet sitting'));
+    check('The Sheet list got the new category', sheet.cats.includes('Pet sitting') && sheet.calls.includes('addOption'));
+    // Typing an existing one (any case) picks it instead of duplicating
+    await go(page, '#/expenses/add');
+    await page.selectOption('#f-cat', '__other__'); await page.fill('.other-row input', 'groceries'); await page.keyboard.press('Enter');
+    check('Enter adds without submitting the form, and an existing name is reused', (await page.$eval('#f-cat', e => e.value)) === 'Groceries' && (await hash(page)) === '#/expenses/add' && sheet.cats.filter(c => c.toLowerCase() === 'groceries').length === 1);
+    // Cancel goes back
+    await page.selectOption('#f-cat', 'Utilities');
+    await page.selectOption('#f-cat', '__other__');
+    await page.click('[data-act="otherCancel"]');
+    check('Cancel puts the dropdown back', (await page.$eval('#f-cat', e => e.value)) === 'Utilities' && !(await page.isVisible('.other-row')));
+    // Account
+    await page.selectOption('#f-acct', '__other__'); await page.fill('.other-row input', 'amex gold');
+    await page.click('[data-act="otherAdd"]');
+    check('A new account is selected and added', (await page.$eval('#f-acct', e => e.value)) === 'Amex gold');
+    await synced(page);
+    check('The Sheet Accounts list got it', sheet.accts.includes('Amex gold'));
+    // It shows up on other forms too
+    await go(page, '#/income/pay');
+    check('Other forms offer the new account', (await page.$$eval('#p-acct option', e => e.map(x => x.textContent))).includes('Amex gold'));
+    await go(page, '#/expenses/budget');
+    check('Budgets can add a category with Other too', (await page.$$eval('#b-cat option', e => e.map(x => x.textContent))).pop() === 'Other…');
+    await ctx.close();
+    // Offline: the choice is kept and sent later
+    const off = await mk(browser);
+    await go(off.page, '#/expenses/add');
+    await off.page.selectOption('#f-cat', '__other__'); await off.page.fill('.other-row input', 'Gifts'); await off.page.click('[data-act="otherAdd"]');
+    const q = await off.page.evaluate(() => JSON.parse(localStorage.getItem('ledger.queue')));
+    check('Offline, the new choice waits in the queue', q.length === 1 && q[0].type === 'addOption' && q[0].value === 'Gifts' && q[0].kind === 'category');
+    await off.ctx.close();
   }
 
   // ---------- 6. Older Sheet script ----------

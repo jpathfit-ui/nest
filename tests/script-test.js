@@ -131,6 +131,19 @@ check('Removes one balance', (call({ action: 'removeBalance', id: 'b_bal00000000
 call({ action: 'addBalance', balance: { ...bal, id: 'b_bal0000000000006', date: '2026-11-15', cents: 400000 } });
 check('Removing an account removes its balances too', (call({ action: 'removeAccount', id: acct.id }), (l = call({ action: 'list' }), l.accounts.length === 0 && l.balances.length === 0)));
 
+// New dropdown choices
+sheets.Categories = new Sheet('Categories'); sheets.Categories.data = [['Category', 'Group'], ['Groceries', 'Food']];
+sheets.Settings = new Sheet('Settings'); sheets.Settings.data = [['Setting', 'Value'], ['People', 'John, Sue'], ['Accounts', 'Chequing, Savings']];
+check('Adds a category as a new row', (call({ action: 'addOption', kind: 'category', value: 'Pet sitting' }), sheets.Categories.data[2][0] === 'Pet sitting' && sheets.Categories.data[2][1] === 'Other'));
+check('A repeated category in any case is not added twice', (call({ action: 'addOption', kind: 'category', value: 'PET SITTING' }), sheets.Categories.data.length === 3));
+check('Adds an account to the Settings list', (call({ action: 'addOption', kind: 'account', value: 'Amex Gold' }), sheets.Settings.data[2][1] === 'Chequing, Savings, Amex Gold'));
+check('A repeated account is not added twice', (call({ action: 'addOption', kind: 'account', value: 'amex gold' }), sheets.Settings.data[2][1] === 'Chequing, Savings, Amex Gold'));
+check('Commas are removed so the list stays intact', (call({ action: 'addOption', kind: 'account', value: 'A, B' }), sheets.Settings.data[2][1] === 'Chequing, Savings, Amex Gold, A B'));
+check('The new choices come back in the list', (l = call({ action: 'list' }), l.meta.categories.includes('Pet sitting') && l.meta.accounts.includes('Amex Gold')));
+check('Rejects an empty value', !call({ action: 'addOption', kind: 'category', value: ' ' }).ok);
+check('Rejects an unknown list', !call({ action: 'addOption', kind: 'people', value: 'Bob' }).ok);
+check('A formula typed as a category is neutralised', (call({ action: 'addOption', kind: 'category', value: '=HYPERLINK("x")' }), String(sheets.Categories.data[3][0]).charAt(0) === "'"));
+
 // Safety
 check('A wrong PIN is refused for the new actions', JSON.parse(ctx.doPost({ postData: { contents: JSON.stringify({ pin: '000000', action: 'saveBudget', category: 'Gas', cents: 100 }) } }).t).ok === false);
 check('Unknown actions are still refused', call({ action: 'nope' }).ok === false);

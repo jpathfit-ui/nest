@@ -186,6 +186,7 @@ function doPost(e) {
       case 'removeBudget': return out_(removeBudget_(req.category));
       case 'saveBill': return out_(saveBill_(req.bill));
       case 'removeBill': return out_(removeBill_(req.id));
+      case 'addOption': return out_(addOption_(req.kind, req.value));
       case 'saveAccount': return out_(saveAccount_(req.account));
       case 'removeAccount': return out_(removeAccount_(req.id));
       case 'addBalance': return out_(addBalance_(req.balance));
@@ -550,6 +551,43 @@ function removeJob_(id) {
   var r = findRow_(sh, id);
   if (r > 0) sh.deleteRow(r); // past paycheques keep the job name as text, so history is untouched
   return { ok: true, removed: r > 0 ? 1 : 0 };
+}
+
+/* ---------- New dropdown choices ---------- */
+
+// "Other" in the app adds a choice to the list the dropdowns read from: a row in Categories, or the Accounts line in Settings.
+function addOption_(kind, value) {
+  var v = clean_(String(value || '').replace(/[,\s]+/g, ' '), 60);
+  if (!v) throw new Error('Missing value');
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (kind === 'category') {
+    var cs = ss.getSheetByName('Categories');
+    if (!cs) throw new Error('Run setup() first.');
+    var last = cs.getLastRow();
+    if (last >= 2) {
+      var names = cs.getRange(2, 1, last - 1, 1).getValues();
+      for (var i = 0; i < names.length; i++) if (String(names[i][0]).toLowerCase() === v.toLowerCase()) return { ok: true, duplicate: true };
+    }
+    cs.getRange(Math.max(last, 1) + 1, 1, 1, 2).setValues([[v, 'Other']]);
+    return { ok: true };
+  }
+  if (kind === 'account') {
+    var st = ss.getSheetByName('Settings');
+    if (!st) throw new Error('Run setup() first.');
+    var n = st.getLastRow();
+    var vals = n >= 2 ? st.getRange(2, 1, n - 1, 2).getValues() : [];
+    for (var j = 0; j < vals.length; j++) {
+      if (String(vals[j][0]).toLowerCase() !== 'accounts') continue;
+      var list = String(vals[j][1]).split(',').map(function (x) { return x.trim(); }).filter(String);
+      for (var k = 0; k < list.length; k++) if (list[k].toLowerCase() === v.toLowerCase()) return { ok: true, duplicate: true };
+      list.push(v);
+      st.getRange(j + 2, 2, 1, 1).setValue(list.join(', '));
+      return { ok: true };
+    }
+    st.getRange(n + 1, 1, 1, 2).setValues([['Accounts', v]]);
+    return { ok: true };
+  }
+  throw new Error('Unknown list');
 }
 
 /* ---------- Accounts and balances ---------- */

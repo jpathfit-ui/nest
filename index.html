@@ -153,6 +153,7 @@ input:focus,select:focus,textarea:focus{outline:2px solid var(--acc);outline-off
 .ac{display:flex;align-items:stretch;gap:0;padding:0;overflow:hidden}
 .ac .rc-main{flex:1;border-radius:0}
 .ac .ib{height:auto;width:48px;border-radius:0;border-left:1px solid var(--line)}
+.other-row{margin-top:8px}.other-row .btn{height:44px;padding:0 14px}.oth{min-width:0}
 .hist{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--line)}
 .nt{padding:6px 0;border-bottom:1px solid var(--line)}
 .nt:last-of-type{border-bottom:0}
@@ -275,6 +276,7 @@ async function refresh() {
   const j = await api('list', { since });
   S.rows = j.rows.map(r => ({ id: r.id, date: r.date, merchant: r.merchant, category: r.category, note: r.note, cents: Math.round(r.amount * 100), paidBy: r.paidBy, account: r.account, ratio: typeof r.ratio === 'number' ? r.ratio : null }));
   S.meta = { ...S.meta, ...j.meta };
+  S.queue.forEach(q => { if (q.type === 'addOption') { const l = q.kind === 'category' ? S.meta.categories : S.meta.accounts; if (!l.some(x => x.toLowerCase() === q.value.toLowerCase())) l.push(q.value); } });
   S.income = (j.income || []).map(r => ({ id: r.id, date: r.date, person: r.person, job: r.job, gross: r.gross === null ? null : Math.round(r.gross * 100), net: Math.round(r.net * 100), account: r.account, note: r.note }));
   S.jobs = (j.jobs || []).map(r => ({ id: r.id, person: r.person, name: r.name, freq: r.freq, net: Math.round(r.typicalNet * 100), nextPay: r.nextPay || '', active: r.active !== false }));
   if (Array.isArray(j.budgets)) { S.budgets = j.budgets.map(b => ({ category: b.category, cents: Math.round(b.limit * 100) })); store.set('budgets', S.budgets); }
@@ -290,7 +292,7 @@ function applyAdded(rc) {
   rc.lines.forEach(l => S.rows.push({ id: rc.id, date: rc.date, merchant: rc.merchant, category: l.category, note: rc.note, cents: l.cents, paidBy: rc.paidBy, account: rc.account, ratio: null }));
 }
 function opLabel(q) {
-  return q.type === 'add' || q.type === 'edit' ? q.receipt.merchant : q.type === 'addIncome' || q.type === 'editIncome' ? q.entry.job : q.type === 'saveJob' ? q.job.name : q.type === 'remove' ? 'a deleted expense' : q.type === 'removeIncome' ? 'a deleted paycheque' : q.type === 'saveBudget' || q.type === 'removeBudget' ? 'the ' + q.category + ' budget' : q.type === 'saveBill' ? q.bill.name : q.type === 'removeBill' ? 'a deleted bill' : q.type === 'saveAccount' ? q.account.name : q.type === 'removeAccount' ? 'a deleted account' : q.type === 'addBalance' ? 'a balance update' : q.type === 'removeBalance' ? 'a deleted balance' : q.type === 'addNote' ? 'a note' : q.type === 'removeNote' ? 'a deleted note' : 'a deleted job';
+  return q.type === 'add' || q.type === 'edit' ? q.receipt.merchant : q.type === 'addIncome' || q.type === 'editIncome' ? q.entry.job : q.type === 'saveJob' ? q.job.name : q.type === 'remove' ? 'a deleted expense' : q.type === 'removeIncome' ? 'a deleted paycheque' : q.type === 'saveBudget' || q.type === 'removeBudget' ? 'the ' + q.category + ' budget' : q.type === 'saveBill' ? q.bill.name : q.type === 'removeBill' ? 'a deleted bill' : q.type === 'addOption' ? q.value : q.type === 'saveAccount' ? q.account.name : q.type === 'removeAccount' ? 'a deleted account' : q.type === 'addBalance' ? 'a balance update' : q.type === 'removeBalance' ? 'a deleted balance' : q.type === 'addNote' ? 'a note' : q.type === 'removeNote' ? 'a deleted note' : 'a deleted job';
 }
 async function runOp(q) {
   if (q.type === 'add') { await api('add', { receipt: q.receipt }); applyAdded(q.receipt); }
@@ -305,6 +307,7 @@ async function runOp(q) {
   else if (q.type === 'removeBudget') { await api('removeBudget', { category: q.category }); S.budgets = S.budgets.filter(b => b.category !== q.category); store.set('budgets', S.budgets); }
   else if (q.type === 'saveBill') { await api('saveBill', { bill: q.bill }); const i = S.bills.findIndex(b => b.id === q.bill.id); if (i >= 0) S.bills[i] = { ...q.bill }; else S.bills.push({ ...q.bill }); store.set('bills', S.bills); }
   else if (q.type === 'removeBill') { await api('removeBill', { id: q.id }); S.bills = S.bills.filter(b => b.id !== q.id); store.set('bills', S.bills); }
+  else if (q.type === 'addOption') { await api('addOption', { kind: q.kind, value: q.value }); }
   else if (q.type === 'saveAccount') { await api('saveAccount', { account: q.account }); const i = S.accounts.findIndex(a => a.id === q.account.id); if (i >= 0) S.accounts[i] = { ...q.account }; else S.accounts.push({ ...q.account }); store.set('accounts', S.accounts); }
   else if (q.type === 'removeAccount') { await api('removeAccount', { id: q.id }); S.accounts = S.accounts.filter(a => a.id !== q.id); S.balances = S.balances.filter(b => b.accountId !== q.id); store.set('accounts', S.accounts); store.set('balances', S.balances); }
   else if (q.type === 'addBalance') { await api('addBalance', { balance: q.balance }); if (!S.balances.some(b => b.id === q.balance.id)) S.balances.push({ ...q.balance }); store.set('balances', S.balances); }
@@ -927,7 +930,50 @@ function newDraft() {
   const cats = S.meta.categories;
   return { merchant: '', date: ymd(new Date()), paidBy: S.prefs.paidBy || S.meta.people[0], account: S.prefs.account || '', note: '', total: '', cat: '', catTouched: false, split: false, lines: [{ category: cats[0] || '', amt: '' }, { category: cats[1] || cats[0] || '', amt: '' }] };
 }
-function catOpts(sel) { const list = sel && !S.meta.categories.includes(sel) ? [sel, ...S.meta.categories] : S.meta.categories; return `<option value="">Choose a category</option>` + list.map(c => `<option ${c === sel ? 'selected' : ''}>${esc(c)}</option>`).join(''); }
+/* ---- "Other" in a dropdown: type a new value, it joins the list (and the Sheet) ---- */
+const OTHER = '__other__';
+const OTHER_OPT = kind => `<option value="${OTHER}" data-kind="${kind}">Other…</option>`;
+const OTHER_LABEL = { category: 'New category', account: 'New account' };
+let otherCtx = null;
+function otherClose() { document.querySelectorAll('.other-row').forEach(r => r.remove()); otherCtx = null; }
+function otherOpen(sel) {
+  otherClose();
+  const kind = sel.selectedOptions[0].dataset.kind, prev = sel.dataset.prev || '';
+  otherCtx = { sel, kind, prev };
+  const row = document.createElement('div');
+  row.className = 'other-row row';
+  row.innerHTML = `<input class="oth grow" maxlength="60" autocapitalize="words" placeholder="${OTHER_LABEL[kind]}" aria-label="${OTHER_LABEL[kind]} name"><button type="button" class="btn pri" data-act="otherAdd">Add</button><button type="button" class="btn" data-act="otherCancel">Cancel</button>`;
+  sel.insertAdjacentElement('afterend', row);
+  row.querySelector('input').focus();
+}
+function otherCancel() { if (otherCtx) { otherCtx.sel.value = otherCtx.prev; } otherClose(); }
+function otherAdd() {
+  if (!otherCtx) return;
+  const { sel, kind } = otherCtx, inp = document.querySelector('.other-row input'), name = cap(String(inp.value).replace(/,/g, ' ').trim());
+  if (!name) { inp.focus(); return; }
+  const list = kind === 'category' ? S.meta.categories : S.meta.accounts;
+  const hit = list.find(x => x.toLowerCase() === name.toLowerCase());
+  const value = hit || name;
+  if (!hit) {
+    list.push(value);
+    S.queue.push({ type: 'addOption', kind, value }); saveQ(); store.set('meta', S.meta);
+    // Every dropdown of this kind on screen gets the new choice
+    document.querySelectorAll('select').forEach(x => { const o = [...x.options].find(op => op.value === OTHER && op.dataset.kind === kind); if (o && ![...x.options].some(op => op.value === value)) { const n = document.createElement('option'); n.textContent = value; x.insertBefore(n, o); } });
+    flush();
+  }
+  sel.value = value;
+  otherClose();
+  sel.dispatchEvent(new Event('input', { bubbles: true })); sel.dispatchEvent(new Event('change', { bubbles: true }));
+}
+// Choosing Other must not reach the form handlers as if it were a real value.
+['input', 'change'].forEach(t => document.addEventListener(t, e => {
+  const el = e.target;
+  if (el.tagName === 'SELECT' && el.value === OTHER) { e.stopImmediatePropagation(); if (t === 'change' || !otherCtx) otherOpen(el); }
+  else if (el.tagName === 'SELECT') el.dataset.prev = el.value;
+}, true));
+document.addEventListener('focusin', e => { const el = e.target; if (el.tagName === 'SELECT' && el.value !== OTHER) el.dataset.prev = el.value; });
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('oth')) { e.preventDefault(); otherAdd(); } });
+function catOpts(sel) { const list = sel && !S.meta.categories.includes(sel) ? [sel, ...S.meta.categories] : S.meta.categories; return `<option value="">Choose a category</option>` + list.map(c => `<option ${c === sel ? 'selected' : ''}>${esc(c)}</option>`).join('') + OTHER_OPT('category'); }
 function linesHTML() {
   const d = S.draft;
   return d.lines.map((l, i) => i === 0
@@ -966,7 +1012,7 @@ function viewAdd() {
     <div class="chips"><button type="button" class="chip" data-act="dateToday">Today</button><button type="button" class="chip" data-act="dateYesterday">Yesterday</button></div>
     <label>Paid by</label>
     <div class="seg">${ppl.map(p => `<button type="button" class="${d.paidBy === p ? 'on' : ''}" data-act="paid" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>
-    ${accts.length ? `<label for="f-acct">Account</label><select id="f-acct" data-f="account"><option value="">Not set</option>${accts.map(a => `<option ${a === d.account ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>` : ''}
+    ${`<label for="f-acct">Account</label><select id="f-acct" data-f="account"><option value="">Not set</option>${accts.map(a => `<option ${a === d.account ? 'selected' : ''}>${esc(a)}</option>`).join('')}${OTHER_OPT('account')}</select>`}
     <label for="f-note">Note</label>
     <textarea id="f-note" data-f="note" rows="2" placeholder="Optional">${esc(d.note)}</textarea>
     <div id="err" class="err" hidden></div>
@@ -1242,7 +1288,7 @@ function viewPaste() {
 }
 function catSelect(sel, attrs, label) {
   const list = S.meta.categories.includes(sel) ? S.meta.categories : [sel, ...S.meta.categories];
-  return `<select ${attrs} aria-label="${esc(label)}">${list.map(c => `<option ${c === sel ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>`;
+  return `<select ${attrs} aria-label="${esc(label)}">${list.map(c => `<option ${c === sel ? 'selected' : ''}>${esc(c)}</option>`).join('')}${OTHER_OPT('category')}</select>`;
 }
 function scanItemsHTML() {
   let last = null;
@@ -1282,7 +1328,7 @@ function viewScan() {
     <div class="card"><div class="tot-r"><label for="s-tax" style="margin:0">Tax</label><input id="s-tax" data-s="taxStr" inputmode="decimal" value="${esc(sc.taxStr)}"></div>
       <div class="sm mute">Tax is spread across ${sc.taxFlags ? 'the items marked taxable' : 'all items'}.</div><div id="totals">${scanTotalsHTML()}</div></div>
     <label>Paid by</label><div class="seg">${S.meta.people.map(p => `<button type="button" class="${sc.paidBy === p ? 'on' : ''}" data-act="scanPaid" data-v="${esc(p)}">${esc(p)}</button>`).join('')}</div>
-    ${accts.length ? `<label for="s-a">Account</label><select id="s-a" data-s="account"><option value="">Not set</option>${accts.map(a => `<option ${a === sc.account ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>` : ''}
+    ${`<label for="s-a">Account</label><select id="s-a" data-s="account"><option value="">Not set</option>${accts.map(a => `<option ${a === sc.account ? 'selected' : ''}>${esc(a)}</option>`).join('')}${OTHER_OPT('account')}</select>`}
     <label for="s-n">Note</label><textarea id="s-n" data-s="note" rows="2" placeholder="Optional">${esc(sc.note)}</textarea>
     <div id="err" class="err" hidden></div><div class="gap"></div>
     <button class="btn pri block">Save expense</button>
@@ -1404,7 +1450,7 @@ function viewPay() {
     <label for="p-date">Date</label>
     <input id="p-date" type="date" data-p="date" value="${esc(d.date)}">
     <div class="chips"><button type="button" class="chip" data-act="payToday">Today</button></div>
-    ${accts.length ? `<label for="p-acct">Deposited to</label><select id="p-acct" data-p="account"><option value="">Not set</option>${accts.map(a => `<option ${a === d.account ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select>` : ''}
+    ${`<label for="p-acct">Deposited to</label><select id="p-acct" data-p="account"><option value="">Not set</option>${accts.map(a => `<option ${a === d.account ? 'selected' : ''}>${esc(a)}</option>`).join('')}${OTHER_OPT('account')}</select>`}
     <label for="p-note">Note</label>
     <textarea id="p-note" data-p="note" rows="2" placeholder="Optional">${esc(d.note)}</textarea>
     <div id="err" class="err" hidden></div><div class="gap"></div>
@@ -1547,6 +1593,7 @@ const ACTS = {
   phOpen: async t => { const id = t.dataset.id, d = await PH.get(id); if (!d) { S.photos = S.photos.filter(p => p.id !== id); store.set('photos', S.photos); renderKeep(); toast('That photo is no longer on this phone.'); return; } openPhoto(id, d); },
   phDel: async t => { if (!(await confirmDialog('Discard this photo?', 'It will be removed from this phone.', 'Discard'))) return; const id = t.dataset.id; S.photos = S.photos.filter(p => p.id !== id); store.set('photos', S.photos); PH.del(id); renderKeep(); },
   viewPic: async t => { const d = await PH.get('r_' + t.dataset.id); if (d) showPic(d); else toast('That photo is no longer on this phone.'); },
+  otherAdd, otherCancel,
   closedToggle: () => { S.ui.closedOpen = !S.ui.closedOpen; render(); },
   nwPt: t => { const svg = t.closest('svg'), pts = JSON.parse(svg.dataset.pts), p = pts[+t.dataset.i]; if (!p) return; $('#nwread').innerHTML = `<b>${esc(p[2])}</b> · ${esc(p[3])}`; const dot = $('#nwdot'); dot.setAttribute('cx', p[0]); dot.setAttribute('cy', p[1]); },
   acctEdit: t => { const a = effAccounts().find(x => x.id === t.dataset.id); if (!a) return; S.acctDraft = { ...a, existing: true }; go('/accounts/account'); },
