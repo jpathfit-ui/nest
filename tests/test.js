@@ -131,7 +131,7 @@ const synced = page => page.waitForFunction(() => /^\s*Synced/.test(document.que
     check('Toast explains the photo is kept', /kept on this phone/.test(await text(page, '#toast')));
     check('Photo is recorded as waiting', JSON.parse(await page.evaluate(() => localStorage.getItem('ledger.photos'))).length === 1);
     await page.click('[data-act="readPhoto"]');
-    check('Read photo explains it needs a connection', /Connect your Sheet/.test(await text(page, '#toast')));
+    check('Read photo explains it needs a key or a connection', /Gemini key in Settings, or connect your Sheet/.test(await text(page, '#toast')));
 
     await page.fill('#f-total', '23.45'); await page.dispatchEvent('#f-total', 'change');
     await page.fill('#f-merchant', 'Corner Store');
@@ -601,6 +601,81 @@ const synced = page => page.waitForFunction(() => /^\s*Synced/.test(document.que
     const q = await off.page.evaluate(() => JSON.parse(localStorage.getItem('ledger.queue')));
     check('Offline, the new choice waits in the queue', q.length === 1 && q[0].type === 'addOption' && q[0].value === 'Gifts' && q[0].kind === 'category');
     await off.ctx.close();
+  }
+
+  // ---------- 5f. Gemini key on the phone ----------
+  {
+    const gem = { calls: [], status: 200, reply: null };
+    const GEM_OK = { candidates: [{ content: { parts: [{ text: JSON.stringify({ merchant: 'phone mart', date: today, total: 12.5, tax: 0, items: [{ description: 'Milk', amount: 4.5, category: 'Groceries', section: '', taxed: null }, { description: 'Mystery', amount: 8, category: 'Not a category', section: '', taxed: null }] }) }] } }] };
+    const route = ctx => ctx.route('https://generativelanguage.googleapis.com/**', r => {
+      const req = r.request(); gem.calls.push({ url: req.url(), key: req.headers()['x-goog-api-key'], body: req.postData() });
+      r.fulfill({ status: gem.status, headers: { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'content-type': 'application/json' }, body: JSON.stringify(gem.status === 200 ? (gem.reply || GEM_OK) : { error: { message: 'API key not valid' } }) });
+    });
+    const scriptHits = [];
+    const { ctx, page } = await mk(browser);
+    await route(ctx); await ctx.route('https://script.google.com/**', r => { scriptHits.push(1); r.abort(); });
+    await go(page, '#/settings');
+    check('Settings has a Gemini key section', /Read receipts with Gemini/.test(await text(page)) && /No key on this phone/.test(await text(page)));
+    await page.fill('input[name="key"]', 'not a key'); await page.click('form[data-form="gemkey"] button.btn.pri');
+    check('A bad key is refused', /does not look like a Gemini key/.test(await text(page, '#toast')) && !(await page.evaluate(() => localStorage.getItem('ledger.gkey'))));
+    await page.fill('input[name="key"]', 'AIzaSyTESTKEY1234567890abcdefghijWXYZ'); await page.click('form[data-form="gemkey"] button.btn.pri');
+    await page.waitForTimeout(150);
+    check('A good key is saved and shown only by its last four', /ending WXYZ/.test(await text(page)) && !/AIzaSyTESTKEY/.test(await text(page)));
+    // Camera now reads the receipt with no Sheet
+    await go(page, '#/home');
+    await page.setInputFiles('#cam', { name: 'r.png', mimeType: 'image/png', buffer: RECEIPT });
+    await page.waitForFunction(() => location.hash === '#/expenses/scan');
+    await page.waitForSelector('#s-m[value="Phone mart"]', { timeout: 8000 });
+    check('With a key and no Sheet the camera reads the receipt', (await page.inputValue('#s-m')) === 'Phone mart' && gem.calls.length === 1);
+    check('The key goes to Google only, as a header', gem.calls[0].key === 'AIzaSyTESTKEY1234567890abcdefghijWXYZ' && !gem.calls[0].url.includes('AIza') && scriptHits.length === 0);
+    check('The prompt lists the real categories and carries the photo', /Groceries, Dining Out/.test(gem.calls[0].body) && /inline_data/.test(gem.calls[0].body));
+    check('An unknown category from the model becomes Other', /Other/.test(await page.$$eval('select', e => e.map(x => x.value).join())));
+    // Read photo from the Add form, and Gemini on pasted text
+    await go(page, '#/expenses/paste');
+    await page.fill('#p-t', 'PHONE MART\n1 Milk 4.50\n1 Bread 8.00\nTOTAL 12.50');
+    await page.click('[data-act="readTextAI"]');
+    await page.waitForSelector('#s-m[value="Phone mart"]', { timeout: 8000 });
+    check('Sorting pasted text with Gemini works with just a key', gem.calls.length === 2 && /RECEIPT TEXT/.test(gem.calls[1].body));
+    // Errors
+    gem.status = 400;
+    await go(page, '#/expenses/paste'); await page.fill('#p-t', 'PHONE MART\n1 Milk 4.50\nTOTAL 4.50');
+    await page.click('[data-act="readTextAI"]');
+    await page.waitForSelector('text=not valid', { timeout: 8000 });
+    check('A rejected key says so plainly', /Gemini key is not valid/.test(await text(page)));
+    gem.status = 200;
+    // Remove
+    await go(page, '#/settings');
+    await page.click('[data-act="gemRemove"]');
+    check('Removing the key clears it', /No key on this phone/.test(await text(page)) && !(JSON.parse(await page.evaluate(() => localStorage.getItem('ledger.gkey')) || '""')));
+    await go(page, '#/home');
+    await page.setInputFiles('#cam', { name: 'r.png', mimeType: 'image/png', buffer: RECEIPT });
+    await page.waitForFunction(() => location.hash === '#/expenses/add');
+    check('Without a key and a Sheet the photo is just kept', /kept on this phone/.test(await text(page, '#toast')) && gem.calls.length === 3);
+    await ctx.close();
+
+    // Connected, but the script has no Gemini key of its own: the phone key steps in
+    const sheet = newSheet();
+    const c2 = await mk(browser, { sheet, connected: true });
+    await route(c2.ctx);
+    await c2.page.evaluate(() => localStorage.setItem('ledger.gkey', JSON.stringify('AIzaSyTESTKEY1234567890abcdefghijWXYZ')));
+    const sh = sheetHandler(sheet);
+    await c2.ctx.route('https://script.google.com/**', r => { const b = JSON.parse(r.request().postData() || '{}'); if (b.action === 'scan') return r.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*', 'content-type': 'application/json' }, body: JSON.stringify({ ok: false, error: 'Receipt scanning is not set up yet. Add GEMINI_API_KEY in the script properties.' }) }); return sh(r); });
+    await synced(c2.page);
+    const before = gem.calls.length;
+    await go(c2.page, '#/home');
+    await c2.page.setInputFiles('#cam', { name: 'r.png', mimeType: 'image/png', buffer: RECEIPT });
+    await c2.page.waitForSelector('#s-m[value="Phone mart"]', { timeout: 8000 });
+    check('If the script cannot scan, the phone key does it', gem.calls.length === before + 1);
+    await c2.ctx.close();
+
+    // Forget this phone also forgets the key
+    const c3 = await mk(browser);
+    await c3.page.evaluate(() => localStorage.setItem('ledger.gkey', JSON.stringify('AIzaSyTESTKEY1234567890abcdefghijWXYZ')));
+    await go(c3.page, '#/settings');
+    await c3.page.click('[data-act="forget"]'); await c3.page.click('#modal [data-m="1"]');
+    await c3.page.waitForTimeout(800);
+    check('Forget this phone removes the key', (await c3.page.evaluate(() => localStorage.getItem('ledger.gkey'))) === null);
+    await c3.ctx.close();
   }
 
   // ---------- 6. Older Sheet script ----------

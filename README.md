@@ -57,6 +57,10 @@ Accounts > Balances. Add each account with a type (chequing, savings, TFSA, RRSP
 
 Things to know: an account counts from its first balance, so net worth steps up when you add one. To close an account, enter a final balance of $0, then set it to Closed; its history stays. Deleting an account deletes its balances. The Settings tab list of accounts used on expenses is separate from these. Syncs to Accounts and Balances tabs. Statement import and the Investments tab (contribution room, holdings) come later.
 
+## A Gemini key on the phone (no Sheet needed)
+
+Settings > Read receipts with Gemini. Paste your own Gemini key and that phone can read receipt photos and sort pasted text with no Sheet connected. The key is kept on that phone only (Forget this phone removes it) and is sent only to Google, as a header, never in a web address. In Google AI Studio (or the Cloud console) restrict the key to this app's web address, for example `https://jpathfit-ui.github.io/*`, so a copy of it would be useless anywhere else. When the Sheet is connected the script still does the reading as before. If the script has no key of its own, the phone key steps in. There is no daily cap on a phone key, so watch the usage in Google's console. The Model box is for the day Google retires `gemini-3.6-flash`.
+
 ## Other in a dropdown
 
 Category and account dropdowns end with Other. Choose it, type the new name, tap Add (or press Enter), and it is selected and added to every dropdown straight away. It is also written to the Sheet: a new row on the Categories tab, or added to the Accounts line on the Settings tab, so it is there on the other phone after its next sync. Typing a name that already exists in any capitals picks the existing one. Offline it waits in the queue like everything else. Needs the newest `Code.gs`. Account types, how often, and the like stay fixed lists because the app does sums with them.
@@ -113,7 +117,7 @@ On the Add expense screen, Paste receipt text opens a box. Tap in it and choose 
 
 Tested: the app in a phone-sized browser against a simulated Sheet script (88 checks, plus 15 for pull to refresh, 28 for paste text and 33 for the text reader, including pay date rules across month ends, year ends, and clock changes), the script's real code against a simulated Google Sheet and a simulated Gemini reply (56 checks), and the tax split over 4,000 random receipts.
 
-Phase 5 brings `tests/test.js` to 125 checks on the app (offline camera, budgets, bills, notes, the activity feed, editing, accounts and net worth, capital letters, reduce motion) and `tests/script-test.js` to 63 checks running the real `Code.gs` against a fake Sheet.
+Phase 5 brings `tests/test.js` to 138 checks on the app (offline camera, budgets, bills, notes, the activity feed, editing, accounts and net worth, capital letters, reduce motion) and `tests/script-test.js` to 63 checks running the real `Code.gs` against a fake Sheet.
 
 Not tested: the iPhone Scan Text button (the app only provides the box), the script inside real Google services, and the reader on real receipts with a real Gemini key, because neither is reachable from where this was built. Start with a few receipts you can check by eye, and expect to correct some lines at first. Photos in good light, flat, and filling the frame read best.
 
